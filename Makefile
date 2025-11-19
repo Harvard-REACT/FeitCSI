@@ -6,6 +6,7 @@ CDEFS += -DFEITCSI_VERSION="\"${FEITCSI_VERSION}"\"
 # Target
 BIN_DIR = bin
 BIN = $(BIN_DIR)/app
+NS_SCRIPT = $(BIN_DIR)/csi-netns.sh
 
 # Match all sources in src direcotry
 SRCS_DIR = src
@@ -24,10 +25,10 @@ INCLUDE_LIB_DIRS =
 INCLUDE_LIB = $(foreach includedir,$(INCLUDE_LIB_DIRS),-L$(includedir))
 
 # Set compiler, preprocesor and linker flags
-CXXFLAGS +=  -g -O1 -Wall -std=c++17 $(CDEFS) $(INCLUDE)
-CPPFLAGS += `pkg-config --cflags gtkmm-3.0 libnl-3.0 libnl-genl-3.0 libpcap`
+CXXFLAGS +=  -g -O1 -Wall -std=c++20 $(CDEFS) $(INCLUDE)
+CPPFLAGS += `pkg-config --cflags gtkmm-3.0 libnl-3.0 libnl-route-3.0 libnl-genl-3.0 libpcap`
 LDFLAGS += $(INCLUDE_LIB)
-LDLIBS += `pkg-config --libs gtkmm-3.0 libnl-3.0 libnl-genl-3.0 libpcap`
+LDLIBS += `pkg-config --libs gtkmm-3.0 libnl-3.0 libnl-route-3.0 libnl-genl-3.0 libpcap`
 
 # Set other tools
 MKDIR = mkdir -p
@@ -46,11 +47,13 @@ $(BIN): $(OBJS)
 	@$(MKDIR) $(dir $@)
 	$(CXX) $(LDFLAGS) $^ $(LDLIBS) -o $@
 
-install:
+install: all
 	cp $(BIN) /usr/local/bin/feitcsi
+	cp $(NS_SCRIPT) /usr/local/bin/csi-netns.sh
 
 uninstall:
 	rm /usr/local/bin/feitcsi
+	rm /usr/local/bin/csi-netns.sh
 
 clean:
 	@$(RM) $(BIN)

@@ -16,316 +16,602 @@
  * along with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "nl80211.h" //fix old libs
 #include "WiFIController.h"
+#include "Arguments.h"
+#include "Logger.h"
+#include "Netlink.h"
+#include "main.h"
+#include "nl80211.h"
 
 #include <errno.h>
 #include <iwlib.h>
-#include <netlink/genl/genl.h>
-#include <netlink/genl/family.h>
-#include <netlink/genl/ctrl.h>
+#include <linux/genetlink.h>
+#include <linux/nl80211.h>
+#include <net/if.h>
 #include <netlink/attr.h>
-#include <chrono>
+#include <netlink/genl/ctrl.h>
+#include <netlink/genl/family.h>
+#include <netlink/genl/genl.h>
+#include <netlink/route/link.h>
+#include <optional>
 #include <thread>
-#include <sstream>
-#include <iostream>
-#include <signal.h>
-#include <thread>
-#include "main.h"
-#include "Logger.h"
-#include "Arguments.h"
+#include <vector>
 
-const char *IF_MODES[NL80211_IFTYPE_MAX + 1] = {
-    "unspecified",
-    "IBSS",
-    "managed",
-    "AP",
-    "AP/VLAN",
-    "WDS",
-    "monitor",
-    "mesh point",
-    "P2P-client",
-    "P2P-GO",
-    "P2P-device",
-    "outside context of a BSS",
-    "NAN",
-};
+void WiFIController::getAllInterfaces() {
+    std::vector<InterfaceInfoBuilder> interfaces;
 
-void WiFIController::killNetworkProcesses()
-{
-    std::string procesNames[] = {
-        "wpa_action",
-        "wpa_supplicant",
-        "wpa_cli",
-        "dhclient",
-        "ifplugd",
-        "dhcdbd",
-        "dhcpcd",
-        "udhcpc",
-        "NetworkManager",
-        "knetworkmanager",
-        "avahi-autoipd",
-        "avahi-daemon",
-        "wlassistant",
-        "wifibox",
-        "net_applet",
-        "wicd-daemon",
-        "wicd-client",
-        "iwd",
-        "hostapd"};
-
-    for (std::string name : procesNames)
-    {
-        char buf[512];
-        std::string cmnd = "pidof " + name;
-        FILE *pipe = popen(cmnd.c_str(), "r");
-        fgets(buf, 512, pipe);
-        std::stringstream ss(buf);
-        std::string word;
-        while (ss >> word)
-        { // Extract word from the stream.
-            pid_t pid = std::atoi(word.c_str());
-            if (pid)
-            {
-                kill(pid, SIGKILL);
-            }
-        }
-        pclose(pipe);
-    }
-}
-
-void WiFIController::getInterfaces()
-{
-    Cmd cmd{
+    Cmd get_interface_cmd{
         .id = NL80211_CMD_GET_INTERFACE,
         .idby = CIB_NONE,
         .nlFlags = NLM_F_DUMP,
-        .handler = NULL,
-        .valid_handler = this->processGetInterfacesHandler,
+        .device = 0,
+        .pre_execute_handler = NULL,
+        .valid_handler = this->getInterfaceInfoHandler,
+        .valid_handler_args = (void*)&interfaces,
     };
 
-    this->nlExecCommand(cmd);
+    this->nlExecCommand(get_interface_cmd);
+
+    for (auto& builder : interfaces) {
+        // Invariant: all builders in the list have interfaceIndex set
+        uint32_t interfaceIndex = builder.interfaceIndex().value();
+
+        Cmd get_tx_power_cmd{
+            .id = NL80211_CMD_GET_WIPHY,
+            .idby = CIB_NETDEV,
+            .nlFlags = NLM_F_DUMP,
+            .device = interfaceIndex,
+            .pre_execute_handler = NULL,
+            .valid_handler = this->getInterfaceInfoTxPowerHandler,
+            .valid_handler_args = (void*)&builder,
+        };
+
+        this->nlExecCommand(get_tx_power_cmd);
+
+        std::optional<InterfaceInfo> info = builder.build();
+        if (!info.has_value()) {
+            continue;
+        }
+        this->interfaces[info.value().ifName] = info.value();
+    }
 }
 
-void WiFIController::getInterfaceInfo(const char *ifname)
-{
+std::optional<InterfaceInfo> WiFIController::getInterfaceInfo(const std::string interfaceName) {
+    std::vector<InterfaceInfoBuilder> interfaces;
+
     Cmd cmd{
         .id = NL80211_CMD_GET_INTERFACE,
         .idby = CIB_NETDEV,
         .nlFlags = 0,
-        .device = if_nametoindex(ifname),
-        .handler = NULL,
-        .valid_handler = this->processGetInterfaceInfoHandler,
+        .device = if_nametoindex(interfaceName.c_str()),
+        .pre_execute_handler = NULL,
+        .valid_handler = this->getInterfaceInfoHandler,
+        .valid_handler_args = (void*)&interfaces,
     };
 
     this->nlExecCommand(cmd);
-}
 
-void WiFIController::setTxPower()
-{
-    Cmd cmd{
-        .id = NL80211_CMD_SET_WIPHY,
-        .idby = CIB_NETDEV,
-        .nlFlags = 0,
-        .device = if_nametoindex(this->currentDeviceName.c_str()),
-        .handler = this->setTxPowerHandler,
-    };
-
-    this->nlExecCommand(cmd);
-}
-
-void WiFIController::addDevice(const char *name, const nl80211_iftype type)
-{
-    if (this->phys.empty())
-    {
-        throw std::ios_base::failure("Error no phy devices\n");
-        return;
+    if (interfaces.empty()) {
+        return std::nullopt;
     }
 
-    const void *settings[] = {name, &type};
-
-    Cmd cmd{
-        .id = NL80211_CMD_NEW_INTERFACE,
-        .idby = CIB_PHY,
-        .nlFlags = 0,
-        .device = this->phys[0],
-        .handler = this->processaddDeviceHandler,
-        .valid_handler = NULL,
-        .args = settings,
-    };
-    this->nlExecCommand(cmd);
-}
-
-int WiFIController::setInterfaceUpDown(const char *ifName, bool up)
-{
-    // Create a socket file descriptor
-    int sockfd = socket(AF_INET, SOCK_DGRAM, 0);
-    if (sockfd < 0)
-    {
-        perror("Failed to create socket");
-        return 1;
+    if (interfaces.size() > 1) {
+        Logger::log(warning) << "Multiple interfaces found with name " << interfaceName
+                             << ". Using the first one.\n";
     }
 
-    // Get the interface index
-    struct ifreq ifr;
-    memset(&ifr, 0, sizeof(ifr));
-    strncpy(ifr.ifr_name, ifName, IFNAMSIZ - 1);
-    if (ioctl(sockfd, SIOCGIFINDEX, &ifr) < 0)
-    {
-        perror("Failed to get interface index");
-        close(sockfd);
-        return 1;
-    }
+    InterfaceInfoBuilder builder = interfaces[0];
+    // Invariant: builder has to have interfaceIndex set
+    uint32_t interfaceIndex = builder.interfaceIndex().value();
 
-    if (up)
-    {
-        ifr.ifr_flags |= IFF_UP;
-        this->currentDeviceName = ifName;
-    }
-    else
-    {
-        ifr.ifr_flags &= ~IFF_UP;
-    }
-    if (ioctl(sockfd, SIOCSIFFLAGS, &ifr) < 0)
-    {
-        perror("Failed to bring down interface");
-        close(sockfd);
-        return 1;
-    }
-
-    // Close the socket
-    close(sockfd);
-
-    if (Arguments::arguments.verbose)
-    {
-        Logger::log(info) << "Interface " << ifName << " has been brought " << (up ? "up" : "down") << "\n";
-    }
-
-    return 0;
-}
-
-void WiFIController::setFreq(uint16_t freq, const char *bw)
-{
-    const void *settings[] = {&freq, bw};
-    Cmd cmd{
-        .id = NL80211_CMD_SET_WIPHY,
-        .idby = CIB_NETDEV,
-        .nlFlags = 0,
-        .device = if_nametoindex(this->currentDeviceName.c_str()),
-        .handler = processSetFreq,
-        .valid_handler = NULL,
-        .args = settings,
-    };
-    this->nlExecCommand(cmd);
-}
-
-void WiFIController::removeInterface(const char *name, int ifIndex)
-{
-    Cmd cmd{
-        .id = NL80211_CMD_DEL_INTERFACE,
-        .idby = CIB_NETDEV,
-        .nlFlags = 0,
-        .device = ifIndex ? ifIndex : if_nametoindex(name),
-        .handler = NULL,
-        .valid_handler = NULL,
-    };
-    this->nlExecCommand(cmd);
-}
-
-void WiFIController::createMonitorInteface()
-{
-    this->addDevice(MONITOR_INTERFACE_NAME, NL80211_IFTYPE_MONITOR);
-    while (this->currentInterfaceInfo.freq != Arguments::arguments.frequency)
-    {
-        try
-        {
-            this->setInterfaceUpDown(MONITOR_INTERFACE_NAME, true);
-            this->setFreq(Arguments::arguments.frequency, Arguments::arguments.bandwidth.c_str());
-        }
-        catch (const std::exception &e)
-        {
-            // Just skip
-        }
-
-        this->getInterfaceInfo(MONITOR_INTERFACE_NAME);
-    }
-    this->setTxPower();
-}
-
-void WiFIController::createApInteface()
-{
-    this->addDevice(AP_INTERFACE_NAME, NL80211_IFTYPE_MONITOR);
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    while (this->currentInterfaceInfo.ifType != NL80211_IFTYPE_AP)
-    {
-        try
-        {
-            this->setInterfaceUpDown(MONITOR_INTERFACE_NAME, false);
-            this->setApMode();
-        }
-        catch (const std::exception &e)
-        {
-            // Just skip
-        }
-
-        this->getInterfaceInfo(AP_INTERFACE_NAME);
-    }
-    this->setInterfaceUpDown(AP_INTERFACE_NAME, true);
-    this->setTxPower();
-}
-
-void WiFIController::getPhys()
-{
-    Cmd cmd{
+    Cmd get_tx_power_cmd{
         .id = NL80211_CMD_GET_WIPHY,
-        .idby = CIB_NONE,
+        .idby = CIB_NETDEV,
         .nlFlags = NLM_F_DUMP,
-        .handler = NULL,
-        .valid_handler = this->processGetPhysHandler,
+        .device = interfaceIndex,
+        .pre_execute_handler = NULL,
+        .valid_handler = this->getInterfaceInfoTxPowerHandler,
+        .valid_handler_args = (void*)&builder,
     };
-    this->nlExecCommand(cmd);
+
+    this->nlExecCommand(get_tx_power_cmd);
+
+    std::optional<InterfaceInfo> info = builder.build();
+    if (!info.has_value()) {
+        return std::nullopt;
+    }
+    this->interfaces[info.value().ifName] = info.value();
+
+    return info;
 }
 
-int WiFIController::processGetPhysHandler(struct nl_msg *msg, void *arg)
-{
-    WiFIController *instance = (WiFIController *)arg;
-    struct nlattr *tb_msg[NL80211_ATTR_MAX + 1];
-    struct genlmsghdr *gnlh = (genlmsghdr *)nlmsg_data(nlmsg_hdr(msg));
-    nla_parse(tb_msg, NL80211_ATTR_MAX, genlmsg_attrdata(gnlh, 0),
-              genlmsg_attrlen(gnlh, 0), NULL);
+std::optional<InterfaceInfo> WiFIController::getInterfaceInfo(uint32_t interfaceIndex) {
+    Cmd cmd{
+        .id = NL80211_CMD_GET_INTERFACE,
+        .idby = CIB_NETDEV,
+        .nlFlags = 0,
+        .device = interfaceIndex,
+        .pre_execute_handler = NULL,
+        .valid_handler = this->getInterfaceInfoHandler,
+    };
 
-    if (tb_msg[NL80211_ATTR_WIPHY])
-    {
-        int64_t phyId = nla_get_u32(tb_msg[NL80211_ATTR_WIPHY]);
-        instance->phys.push_back(phyId);
+    this->nlExecCommand(cmd);
+
+    for (const auto& [_, interfaceInfo] : interfaces) {
+        if (interfaceInfo.ifIndex == interfaceIndex) {
+            return interfaceInfo;
+        }
+    }
+
+    return std::nullopt;
+}
+
+int WiFIController::getInterfaceInfoHandler(struct nl_msg* msg, void* arg) {
+    void** arguments = (void**)arg;
+    WiFIController* instance = (WiFIController*)arguments[0];
+    std::vector<InterfaceInfoBuilder>* builders = (std::vector<InterfaceInfoBuilder>*)arguments[1];
+
+    struct genlmsghdr* gnl_header = (genlmsghdr*)nlmsg_data(nlmsg_hdr(msg));
+    struct nlattr* attribute_table[NL80211_ATTR_MAX + 1];
+    InterfaceInfoBuilder ifInfo;
+
+    int err = nla_parse(attribute_table, NL80211_ATTR_MAX, genlmsg_attrdata(gnl_header, 0),
+                        genlmsg_attrlen(gnl_header, 0), NULL);
+    if (err < 0) {
+        Logger::log(error) << "Unable to parse attribute table for Netlink message: " << err
+                           << "\n";
+        return err;
+    }
+
+    if (attribute_table[NL80211_ATTR_IFNAME]) {
+        ifInfo.interfaceName(nla_get_string(attribute_table[NL80211_ATTR_IFNAME]));
+    }
+
+    if (attribute_table[NL80211_ATTR_IFTYPE]) {
+        ifInfo.interfaceType((nl80211_iftype)nla_get_u32(attribute_table[NL80211_ATTR_IFTYPE]));
+    }
+
+    if (attribute_table[NL80211_ATTR_IFINDEX]) {
+        ifInfo.interfaceIndex(nla_get_u32(attribute_table[NL80211_ATTR_IFINDEX]));
+    }
+
+    if (attribute_table[NL80211_ATTR_WIPHY]) {
+        ifInfo.phyIndex(nla_get_u32(attribute_table[NL80211_ATTR_WIPHY]));
+    }
+
+    if (attribute_table[NL80211_ATTR_WDEV]) {
+        ifInfo.wdevIndex(nla_get_u64(attribute_table[NL80211_ATTR_WDEV]));
+    }
+
+    if (attribute_table[NL80211_ATTR_MAC]) {
+        ifInfo.mac(
+            instance->mac_n2a((const unsigned char*)nla_data(attribute_table[NL80211_ATTR_MAC])));
+    }
+
+    if (attribute_table[NL80211_ATTR_WIPHY_FREQ]) {
+        ifInfo.frequency(nla_get_u32(attribute_table[NL80211_ATTR_WIPHY_FREQ]));
+    }
+
+    if (attribute_table[NL80211_ATTR_WIPHY_TX_POWER_LEVEL]) {
+        Logger::log(info) << ("Magically received tx power!\n");
+        ifInfo.txPowerDbm(nla_get_u32(attribute_table[NL80211_ATTR_WIPHY_TX_POWER_LEVEL]) / 100);
+    }
+
+    if (attribute_table[NL80211_ATTR_IFINDEX]) {
+        ifInfo.interfaceIndex(nla_get_u32(attribute_table[NL80211_ATTR_IFINDEX]));
+        builders->push_back(ifInfo);
     }
 
     return NL_OK;
 }
 
-uint16_t WiFIController::chanModeToWidth(struct ChanMode &chanMode)
-{
-    switch (chanMode.width)
-    {
-    case NL80211_CHAN_WIDTH_20:
-        return 20;
-    case NL80211_CHAN_WIDTH_40:
-        return 40;
-    case NL80211_CHAN_WIDTH_80:
-        return 80;
-    case NL80211_CHAN_WIDTH_160:
-        return 160;
-    case NL80211_CHAN_WIDTH_320:
-        return 320;
+int WiFIController::getInterfaceInfoTxPowerHandler(struct nl_msg* msg, void* arg) {
+    void** arguments = (void**)arg;
+    InterfaceInfoBuilder* builder = (InterfaceInfoBuilder*)arguments[1];
 
-    default:
-        break;
+    struct genlmsghdr* gnl_header = (genlmsghdr*)nlmsg_data(nlmsg_hdr(msg));
+    struct nlattr* attribute_table[NL80211_ATTR_MAX + 1];
+
+    int err = nla_parse(attribute_table, NL80211_ATTR_MAX, genlmsg_attrdata(gnl_header, 0),
+                        genlmsg_attrlen(gnl_header, 0), NULL);
+    if (err < 0) {
+        Logger::log(error) << "Unable to parse attribute table for Netlink message: " << err
+                           << "\n";
+        return err;
+    }
+
+    if (attribute_table[NL80211_ATTR_WIPHY_TX_POWER_LEVEL]) {
+        int32_t tx_power_mbm = nla_get_s32(attribute_table[NL80211_ATTR_WIPHY_TX_POWER_LEVEL]);
+        int32_t tx_power_dbm = tx_power_mbm / 100;
+        builder->txPowerDbm(tx_power_dbm);
+        return NL_STOP;
+    }
+
+    return NL_OK;
+}
+
+int WiFIController::abortScan(const std::string interfaceName) {
+    Cmd cmd{
+        .id = NL80211_CMD_ABORT_SCAN,
+        .idby = CIB_NETDEV,
+        .nlFlags = 0,
+        .device = if_nametoindex(interfaceName.c_str()),
+        .pre_execute_handler = nullptr,
+        .valid_handler = NULL,
+    };
+
+    return nlExecCommand(cmd);
+}
+
+int WiFIController::setInterfaceTxPower(const std::string interfaceName, int32_t power_dbm) {
+    Cmd cmd{
+        .id = NL80211_CMD_SET_WIPHY,
+        .idby = CIB_NETDEV,
+        .nlFlags = 0,
+        .device = if_nametoindex(interfaceName.c_str()),
+        .pre_execute_handler = this->setTxPowerHandler,
+        .valid_handler = NULL,
+        // Care must be taken to ensure that this pointer's lifetime exceeds the length of
+        // the callback. In this case, this function's stack frame expires after the stack frame
+        // of the callback.
+        .pre_execute_handler_args = (void*)&power_dbm,
+    };
+
+    this->nlExecCommand(cmd);
+
+    std::optional<InterfaceInfo> info = getInterfaceInfo(interfaceName);
+
+    if (!info.has_value()) {
+        return -1;
+    }
+
+    return power_dbm == info.value().txdBm ? 0 : -1;
+}
+
+int WiFIController::setInterfaceTxPower(uint32_t interfaceIndex, int32_t power_dbm) {
+    Cmd cmd{
+        .id = NL80211_CMD_SET_WIPHY,
+        .idby = CIB_NETDEV,
+        .nlFlags = 0,
+        .device = interfaceIndex,
+        .pre_execute_handler = this->setTxPowerHandler,
+        // Care must be taken to ensure that this pointer's lifetime exceeds the length of
+        // the callback. In this case, this function's stack frame expires after the stack frame
+        // of the callback.
+        .pre_execute_handler_args = (void*)&power_dbm,
+    };
+
+    this->nlExecCommand(cmd);
+
+    return power_dbm == getInterfaceInfo(interfaceIndex).value().txdBm ? 0 : -1;
+}
+
+int WiFIController::setTxPowerHandler(nl80211_state* state, nl_msg* msg, void* arg) {
+    int32_t power_dbm = *(int32_t*)arg;
+    int32_t power_mbm = power_dbm * 100;
+
+    NLA_PUT_S32(msg, NL80211_ATTR_WIPHY_TX_POWER_SETTING, NL80211_TX_POWER_FIXED);
+    NLA_PUT_S32(msg, NL80211_ATTR_WIPHY_TX_POWER_LEVEL, power_mbm);
+
+    return 0;
+
+nla_put_failure:
+    return -ENOBUFS;
+}
+
+int WiFIController::createInterface(const std::string interfaceName,
+                                    const nl80211_iftype type,
+                                    const unsigned char* mac,
+                                    uint32_t phyIndex) {
+    const void* settings[] = {
+        interfaceName.c_str(),
+        &type,
+        mac,
+    };
+
+    Cmd cmd{
+        .id = NL80211_CMD_NEW_INTERFACE,
+        .idby = CIB_PHY,
+        .nlFlags = 0,
+        .device = phyIndex,
+        .pre_execute_handler = this->createInterfaceHandler,
+        .valid_handler = NULL,
+        .pre_execute_handler_args = settings,
+    };
+
+    this->nlExecCommand(cmd);
+
+    return getInterfaceInfo(interfaceName).has_value() ? 0 : -1;
+}
+
+int WiFIController::createInterfaceHandler(struct nl80211_state* state,
+                                           struct nl_msg* msg,
+                                           void* arg) {
+    void** settings = (void**)arg;
+    const char* name = (const char*)settings[0];
+    const char* mac = (const char*)settings[2];
+    nl80211_iftype* type = (nl80211_iftype*)(settings[1]);
+
+    NLA_PUT_STRING(msg, NL80211_ATTR_IFNAME, name);
+    NLA_PUT_U32(msg, NL80211_ATTR_IFTYPE, *type);
+    NLA_PUT(msg, NL80211_ATTR_MAC, ETH_ALEN, mac);
+
+    return 0;
+
+nla_put_failure:
+    return -ENOBUFS;
+}
+
+void WiFIController::deleteInterface(const std::string name) {
+    Cmd cmd{
+        .id = NL80211_CMD_DEL_INTERFACE,
+        .idby = CIB_NETDEV,
+        .nlFlags = 0,
+        .device = if_nametoindex(name.c_str()),
+        .pre_execute_handler = NULL,
+        .valid_handler = NULL,
+    };
+    this->nlExecCommand(cmd);
+}
+
+void WiFIController::deleteInterface(uint32_t interfaceIndex) {
+    Cmd cmd{
+        .id = NL80211_CMD_DEL_INTERFACE,
+        .idby = CIB_NETDEV,
+        .nlFlags = 0,
+        .device = interfaceIndex,
+        .pre_execute_handler = NULL,
+        .valid_handler = NULL,
+    };
+    this->nlExecCommand(cmd);
+}
+
+int WiFIController::setInterfaceFrequency(const std::string interfaceName,
+                                          uint32_t frequency_mhz,
+                                          const std::string bandwidth) {
+    const void* settings[] = {&frequency_mhz, bandwidth.c_str()};
+
+    Cmd cmd{
+        .id = NL80211_CMD_SET_WIPHY,
+        .idby = CIB_NETDEV,
+        .nlFlags = 0,
+        .device = if_nametoindex(interfaceName.c_str()),
+        .pre_execute_handler = setFrequencyHandler,
+        .valid_handler = NULL,
+        .pre_execute_handler_args = settings,
+    };
+
+    this->nlExecCommand(cmd);
+
+    std::optional<InterfaceInfo> info = getInterfaceInfo(interfaceName);
+    if (!info.has_value()) {
+        return -ENOENT;
+    }
+
+    return info.value().freq == frequency_mhz ? 0 : -1;
+}
+
+int WiFIController::setInterfaceFrequency(uint32_t interfaceIndex,
+                                          uint16_t frequency,
+                                          const std::string bandwidth) {
+    const void* settings[] = {&frequency, bandwidth.c_str()};
+
+    Cmd cmd{
+        .id = NL80211_CMD_SET_WIPHY,
+        .idby = CIB_NETDEV,
+        .nlFlags = 0,
+        .device = interfaceIndex,
+        .pre_execute_handler = setFrequencyHandler,
+        .valid_handler = NULL,
+        .pre_execute_handler_args = settings,
+    };
+
+    this->nlExecCommand(cmd);
+
+    return getInterfaceInfo(interfaceIndex).value().freq == frequency ? 0 : -1;
+}
+
+int WiFIController::setFrequencyHandler(struct nl80211_state* state,
+                                        struct nl_msg* msg,
+                                        void* arg) {
+    void** settings = (void**)arg;
+    uint16_t frequency = *(uint16_t*)(settings[0]);
+    char* bandwidth = (char*)(settings[1]);
+
+    uint32_t freq = frequency;
+    uint32_t freq_offset = 0;
+
+    unsigned int control_freq = freq;
+    unsigned int control_freq_offset = freq_offset;
+    unsigned int center_freq1 = freq;
+    unsigned int center_freq1_offset = freq_offset;
+    enum nl80211_chan_width width =
+        control_freq < 1000 ? NL80211_CHAN_WIDTH_16 : NL80211_CHAN_WIDTH_20_NOHT;
+
+    struct ChanMode selectedChanMode = getChanMode(bandwidth);
+
+    center_freq1 = getCf1(&selectedChanMode, freq);
+
+    /* For non-S1G frequency */
+    if (center_freq1 > 1000)
+        center_freq1_offset = 0;
+
+    width = (nl80211_chan_width)selectedChanMode.width;
+
+    NLA_PUT_U32(msg, NL80211_ATTR_WIPHY_FREQ, control_freq);
+    NLA_PUT_U32(msg, NL80211_ATTR_WIPHY_FREQ_OFFSET, control_freq_offset);
+    NLA_PUT_U32(msg, NL80211_ATTR_CHANNEL_WIDTH, width);
+
+    switch (width) {
+        case NL80211_CHAN_WIDTH_20_NOHT:
+            NLA_PUT_U32(msg, NL80211_ATTR_WIPHY_CHANNEL_TYPE, NL80211_CHAN_NO_HT);
+            break;
+        case NL80211_CHAN_WIDTH_20:
+            NLA_PUT_U32(msg, NL80211_ATTR_WIPHY_CHANNEL_TYPE, NL80211_CHAN_HT20);
+            break;
+        case NL80211_CHAN_WIDTH_40:
+            if (control_freq > center_freq1) {
+                NLA_PUT_U32(msg, NL80211_ATTR_WIPHY_CHANNEL_TYPE, NL80211_CHAN_HT40MINUS);
+            } else {
+                NLA_PUT_U32(msg, NL80211_ATTR_WIPHY_CHANNEL_TYPE, NL80211_CHAN_HT40PLUS);
+            }
+            break;
+        default:
+            break;
+    }
+
+    if (center_freq1) {
+        NLA_PUT_U32(msg, NL80211_ATTR_CENTER_FREQ1, center_freq1);
+    }
+
+    if (center_freq1_offset) {
+        NLA_PUT_U32(msg, NL80211_ATTR_CENTER_FREQ1_OFFSET, center_freq1_offset);
+    }
+
+    return 0;
+
+nla_put_failure:
+    return -ENOBUFS;
+}
+
+int WiFIController::setInterfaceStatus(const std::string interfaceName, bool up) {
+    if (!this->nlstate.rnl_socket) {
+        Logger::log(error) << "route socket is not initialized\n";
+        return -ENOTCONN;
+    }
+
+    int err;
+    struct rtnl_link* original_link = nullptr;
+    if ((err = rtnl_link_get_kernel(this->nlstate.rnl_socket, 0, interfaceName.c_str(),
+                                    &original_link)) < 0) {
+        Logger::log(error) << "rtnl_link_get_kernel(" << interfaceName << "): " << nl_geterror(err)
+                           << "\n";
+        return err;
+    }
+
+    struct rtnl_link* modified_link = rtnl_link_alloc();
+    if (!modified_link) {
+        rtnl_link_put(original_link);
+        return -NLE_NOMEM;
+    }
+
+    rtnl_link_set_ifindex(modified_link, rtnl_link_get_ifindex(original_link));
+    if (up)
+        rtnl_link_set_flags(modified_link, IFF_UP);
+    else
+        rtnl_link_unset_flags(modified_link, IFF_UP);
+
+    err = rtnl_link_change(this->nlstate.rnl_socket, original_link, modified_link, 0);
+
+    rtnl_link_put(modified_link);
+    rtnl_link_put(original_link);
+
+    if (err < 0) {
+        Logger::log(error) << "rtnl_link_change(" << interfaceName << "): " << nl_geterror(err)
+                           << "\n";
+        return err;
+    }
+
+    if (Arguments::arguments.verbose) {
+        Logger::log(info) << "Interface " << interfaceName << " has been brought "
+                          << (up ? "up" : "down") << "\n";
+    }
+
+    return 0;
+}
+
+void rfkill_unblock() {
+    const char* command = "rfkill unblock all";
+
+    // Execute the command using system()
+    int result = system(command);
+
+    // Check the return value to see if the command was successful
+    if (result == 0) {
+        std::cout << "Successfully executed: " << command << std::endl;
+    } else {
+        std::cerr << "Failed to execute: " << command << ". Return code: " << result << std::endl;
+        // You might want to check errno for more specific error details if needed
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(250));
+}
+
+void WiFIController::createMonitorInterface(uint32_t phy_index,
+                                            uint32_t frequency,
+                                            uint32_t tx_power_dbm,
+                                            const unsigned char* mac) {
+    int err;
+    if (createInterface(MONITOR_INTERFACE_NAME, NL80211_IFTYPE_MONITOR, mac, phy_index) < 0) {
+        Logger::log(error) << "Failed to create monitor mode interface\n";
+        return;
+    }
+
+    if (setInterfaceStatus(MONITOR_INTERFACE_NAME, true) < 0) {
+        Logger::log(error) << "Failed to set interface to up\n";
+        return;
+    };
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(250));
+
+    while ((err = setInterfaceFrequency(MONITOR_INTERFACE_NAME, frequency,
+                                        Arguments::arguments.bandwidth.c_str())) < 0) {
+        Logger::log(error) << "Failed to set frequency (" << err << ")\n";
+        rfkill_unblock();
+        std::this_thread::sleep_for(std::chrono::milliseconds(250));
+    }
+}
+
+void WiFIController::createApInterface(uint32_t phy_index,
+                                       uint32_t frequency,
+                                       uint32_t tx_power_dbm,
+                                       const unsigned char* mac) {
+    int err;
+    if (createInterface(AP_INTERFACE_NAME, NL80211_IFTYPE_AP, mac, phy_index) < 0) {
+        Logger::log(error) << "Failed to create AP mode interface\n";
+        return;
+    }
+
+    if (setInterfaceStatus(AP_INTERFACE_NAME, true) < 0) {
+        Logger::log(error) << "Failed to set interface to up\n";
+        return;
+    };
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(250));
+
+    while ((err = setInterfaceFrequency(MONITOR_INTERFACE_NAME, frequency,
+                                        Arguments::arguments.bandwidth.c_str())) < 0) {
+        Logger::log(error) << "Failed to set frequency (" << err << ")\n";
+        rfkill_unblock();
+        std::this_thread::sleep_for(std::chrono::milliseconds(250));
+    }
+
+    // TODO: fix tx power setting for AP interface, for now this will not loop...
+    while ((err = setInterfaceTxPower(AP_INTERFACE_NAME, tx_power_dbm)) > 0) {
+        Logger::log(error) << "Failed to set TX power(" << err << ")\n";
+        rfkill_unblock();
+        std::this_thread::sleep_for(std::chrono::milliseconds(250));
+    };
+}
+
+uint16_t WiFIController::chanModeToWidth(struct ChanMode& chanMode) {
+    switch (chanMode.width) {
+        case NL80211_CHAN_WIDTH_20:
+            return 20;
+        case NL80211_CHAN_WIDTH_40:
+            return 40;
+        case NL80211_CHAN_WIDTH_80:
+            return 80;
+        case NL80211_CHAN_WIDTH_160:
+            return 160;
+        case NL80211_CHAN_WIDTH_320:
+            return 320;
+        default:
+            break;
     }
     return 0;
 }
 
-ChanMode WiFIController::getChanMode(const char *width)
-{
+ChanMode WiFIController::getChanMode(const char* width) {
     static const struct ChanMode chanMode[] = {
         {.name = "20",
          .width = NL80211_CHAN_WIDTH_20,
@@ -343,54 +629,22 @@ ChanMode WiFIController::getChanMode(const char *width)
          .width = NL80211_CHAN_WIDTH_20_NOHT,
          .freq1_diff = 0,
          .chantype = NL80211_CHAN_NO_HT},
-        {.name = "5MHz",
-         .width = NL80211_CHAN_WIDTH_5,
-         .freq1_diff = 0,
-         .chantype = -1},
-        {.name = "10MHz",
-         .width = NL80211_CHAN_WIDTH_10,
-         .freq1_diff = 0,
-         .chantype = -1},
-        {.name = "80",
-         .width = NL80211_CHAN_WIDTH_80,
-         .freq1_diff = 0,
-         .chantype = -1},
-        {.name = "160",
-         .width = NL80211_CHAN_WIDTH_160,
-         .freq1_diff = 0,
-         .chantype = -1},
-        {.name = "320MHz",
-         .width = NL80211_CHAN_WIDTH_320,
-         .freq1_diff = 0,
-         .chantype = -1},
-        {.name = "1MHz",
-         .width = NL80211_CHAN_WIDTH_1,
-         .freq1_diff = 0,
-         .chantype = -1},
-        {.name = "2MHz",
-         .width = NL80211_CHAN_WIDTH_2,
-         .freq1_diff = 0,
-         .chantype = -1},
-        {.name = "4MHz",
-         .width = NL80211_CHAN_WIDTH_4,
-         .freq1_diff = 0,
-         .chantype = -1},
-        {.name = "8MHz",
-         .width = NL80211_CHAN_WIDTH_8,
-         .freq1_diff = 0,
-         .chantype = -1},
-        {.name = "16MHz",
-         .width = NL80211_CHAN_WIDTH_16,
-         .freq1_diff = 0,
-         .chantype = -1},
+        {.name = "5MHz", .width = NL80211_CHAN_WIDTH_5, .freq1_diff = 0, .chantype = -1},
+        {.name = "10MHz", .width = NL80211_CHAN_WIDTH_10, .freq1_diff = 0, .chantype = -1},
+        {.name = "80", .width = NL80211_CHAN_WIDTH_80, .freq1_diff = 0, .chantype = -1},
+        {.name = "160", .width = NL80211_CHAN_WIDTH_160, .freq1_diff = 0, .chantype = -1},
+        {.name = "320MHz", .width = NL80211_CHAN_WIDTH_320, .freq1_diff = 0, .chantype = -1},
+        {.name = "1MHz", .width = NL80211_CHAN_WIDTH_1, .freq1_diff = 0, .chantype = -1},
+        {.name = "2MHz", .width = NL80211_CHAN_WIDTH_2, .freq1_diff = 0, .chantype = -1},
+        {.name = "4MHz", .width = NL80211_CHAN_WIDTH_4, .freq1_diff = 0, .chantype = -1},
+        {.name = "8MHz", .width = NL80211_CHAN_WIDTH_8, .freq1_diff = 0, .chantype = -1},
+        {.name = "16MHz", .width = NL80211_CHAN_WIDTH_16, .freq1_diff = 0, .chantype = -1},
     };
 
     struct ChanMode selectedChanMode = {};
 
-    for (unsigned int i = 0; i < ARRAY_SIZE(chanMode); i++)
-    {
-        if (strcasecmp(chanMode[i].name, width) == 0)
-        {
+    for (unsigned int i = 0; i < ARRAY_SIZE(chanMode); i++) {
+        if (strcasecmp(chanMode[i].name, width) == 0) {
             selectedChanMode = chanMode[i];
             break;
         }
@@ -399,371 +653,69 @@ ChanMode WiFIController::getChanMode(const char *width)
     return selectedChanMode;
 }
 
-int WiFIController::processSetFreq(struct nl80211_state *state, struct nl_msg *msg, void *arg)
-{
-    void **settings = (void **)arg;
-    uint16_t settingsFreq = *(uint16_t *)(settings[0]);
-    char *settingsWidth = (char *)(settings[1]);
-
-    if (Arguments::arguments.verbose)
-    {
-        Logger::log(info) << "Setting frequency " << settingsFreq << " channel width " << settingsWidth << "\n";
-    }
-
-    uint32_t freq = settingsFreq;
-    uint32_t freq_offset = 0;
-
-    unsigned int control_freq = freq;
-    unsigned int control_freq_offset = freq_offset;
-    unsigned int center_freq1 = freq;
-    unsigned int center_freq1_offset = freq_offset;
-    enum nl80211_chan_width width = control_freq < 1000 ? NL80211_CHAN_WIDTH_16 : NL80211_CHAN_WIDTH_20_NOHT;
-
-    struct ChanMode selectedChanMode = getChanMode(settingsWidth);
-
-    center_freq1 = getCf1(&selectedChanMode, freq);
-
-    /* For non-S1G frequency */
-    if (center_freq1 > 1000)
-        center_freq1_offset = 0;
-
-    width = (nl80211_chan_width)selectedChanMode.width;
-
-    NLA_PUT_U32(msg, NL80211_ATTR_WIPHY_FREQ, control_freq);
-    NLA_PUT_U32(msg, NL80211_ATTR_WIPHY_FREQ_OFFSET, control_freq_offset);
-    NLA_PUT_U32(msg, NL80211_ATTR_CHANNEL_WIDTH, width);
-
-    switch (width)
-    {
-    case NL80211_CHAN_WIDTH_20_NOHT:
-        NLA_PUT_U32(msg, NL80211_ATTR_WIPHY_CHANNEL_TYPE, NL80211_CHAN_NO_HT);
-        break;
-    case NL80211_CHAN_WIDTH_20:
-        NLA_PUT_U32(msg, NL80211_ATTR_WIPHY_CHANNEL_TYPE, NL80211_CHAN_HT20);
-        break;
-    case NL80211_CHAN_WIDTH_40:
-        if (control_freq > center_freq1)
-        {
-            NLA_PUT_U32(msg, NL80211_ATTR_WIPHY_CHANNEL_TYPE, NL80211_CHAN_HT40MINUS);
-        }
-        else
-        {
-            NLA_PUT_U32(msg, NL80211_ATTR_WIPHY_CHANNEL_TYPE, NL80211_CHAN_HT40PLUS);
-        }
-        break;
-    default:
-        break;
-    }
-
-    if (center_freq1)
-    {
-        NLA_PUT_U32(msg, NL80211_ATTR_CENTER_FREQ1, center_freq1);
-    }
-
-    if (center_freq1_offset)
-    {
-        NLA_PUT_U32(msg, NL80211_ATTR_CENTER_FREQ1_OFFSET, center_freq1_offset);
-    }
-
-    return 0;
-
-nla_put_failure:
-    return -ENOBUFS;
-}
-
-int WiFIController::setTxPowerHandler(nl80211_state *state, nl_msg *msg, void *arg)
-{
-    enum nl80211_tx_power_setting type = NL80211_TX_POWER_FIXED;
-    int mbm = Arguments::arguments.txPower * 100; // dBm to mbm *100
-
-    NLA_PUT_U32(msg, NL80211_ATTR_WIPHY_TX_POWER_SETTING, type);
-    NLA_PUT_U32(msg, NL80211_ATTR_WIPHY_TX_POWER_LEVEL, mbm);
-
-    return 0;
-
-nla_put_failure:
-    return -ENOBUFS;
-}
-
-int WiFIController::processaddDeviceHandler(struct nl80211_state *state, struct nl_msg *msg, void *arg)
-{
-    void **settings = (void **)arg;
-    const char *name = (const char *)settings[0];
-    nl80211_iftype *type = (nl80211_iftype *)(settings[1]);
-
-    NLA_PUT_STRING(msg, NL80211_ATTR_IFNAME, name);
-    NLA_PUT_U32(msg, NL80211_ATTR_IFTYPE, *type);
-    NLA_PUT(msg, NL80211_ATTR_MAC, ETH_ALEN, Arguments::arguments.mac);
-
-    return 0;
-nla_put_failure:
-    return -ENOBUFS;
-}
-
-int WiFIController::getCf1(const struct ChanMode *chanmode, unsigned long freq)
-{
+int WiFIController::getCf1(const struct ChanMode* chanmode, unsigned long freq) {
     unsigned int cf1 = freq, j;
-    unsigned int bw80[] = {5180, 5260, 5500, 5580, 5660, 5745,
-                           5955, 6035, 6115, 6195, 6275, 6355,
-                           6435, 6515, 6595, 6675, 6755, 6835,
-                           6195, 6995};
-    unsigned int bw160[] = {5180, 5500, 5955, 6115, 6275, 6435,
-                            6595, 6755, 6915};
+    unsigned int bw80[] = {5180, 5260, 5500, 5580, 5660, 5745, 5955, 6035, 6115, 6195,
+                           6275, 6355, 6435, 6515, 6595, 6675, 6755, 6835, 6195, 6995};
+    unsigned int bw160[] = {5180, 5500, 5955, 6115, 6275, 6435, 6595, 6755, 6915};
     /* based on 11be D2 E.1 Country information and operating classes */
     unsigned int bw320[] = {5955, 6115, 6275, 6435, 6595, 6755};
 
-    switch (chanmode->width)
-    {
-    case NL80211_CHAN_WIDTH_80:
-        /* setup center_freq1 */
-        for (j = 0; j < ARRAY_SIZE(bw80); j++)
-        {
-            if (freq >= bw80[j] && freq < bw80[j] + 80)
+    switch (chanmode->width) {
+        case NL80211_CHAN_WIDTH_80:
+            /* setup center_freq1 */
+            for (j = 0; j < ARRAY_SIZE(bw80); j++) {
+                if (freq >= bw80[j] && freq < bw80[j] + 80)
+                    break;
+            }
+
+            if (j == ARRAY_SIZE(bw80))
                 break;
-        }
 
-        if (j == ARRAY_SIZE(bw80))
+            cf1 = bw80[j] + 30;
             break;
+        case NL80211_CHAN_WIDTH_160:
+            /* setup center_freq1 */
+            for (j = 0; j < ARRAY_SIZE(bw160); j++) {
+                if (freq >= bw160[j] && freq < bw160[j] + 160)
+                    break;
+            }
 
-        cf1 = bw80[j] + 30;
-        break;
-    case NL80211_CHAN_WIDTH_160:
-        /* setup center_freq1 */
-        for (j = 0; j < ARRAY_SIZE(bw160); j++)
-        {
-            if (freq >= bw160[j] && freq < bw160[j] + 160)
+            if (j == ARRAY_SIZE(bw160))
                 break;
-        }
 
-        if (j == ARRAY_SIZE(bw160))
+            cf1 = bw160[j] + 70;
             break;
+        case NL80211_CHAN_WIDTH_320:
+            /* setup center_freq1 */
+            for (j = 0; j < ARRAY_SIZE(bw320); j++) {
+                if (freq >= bw320[j] && freq < bw320[j] + 160)
+                    break;
+            }
 
-        cf1 = bw160[j] + 70;
-        break;
-    case NL80211_CHAN_WIDTH_320:
-        /* setup center_freq1 */
-        for (j = 0; j < ARRAY_SIZE(bw320); j++)
-        {
-            if (freq >= bw320[j] && freq < bw320[j] + 160)
+            if (j == ARRAY_SIZE(bw320))
                 break;
-        }
 
-        if (j == ARRAY_SIZE(bw320))
+            cf1 = bw320[j] + 150;
             break;
-
-        cf1 = bw320[j] + 150;
-        break;
-    default:
-        cf1 = freq + chanmode->freq1_diff;
-        break;
+        default:
+            cf1 = freq + chanmode->freq1_diff;
+            break;
     }
 
     return cf1;
 }
 
-int WiFIController::processGetInterfacesHandler(struct nl_msg *msg, void *arg)
-{
-    WiFIController *instance = (WiFIController *)arg;
-    struct genlmsghdr *gnlh = (genlmsghdr *)nlmsg_data(nlmsg_hdr(msg));
-    struct nlattr *tb_msg[NL80211_ATTR_MAX + 1];
-
-    struct InterfaceInfo ifInfo;
-
-    nla_parse(tb_msg, NL80211_ATTR_MAX, genlmsg_attrdata(gnlh, 0),
-              genlmsg_attrlen(gnlh, 0), NULL);
-
-    if (tb_msg[NL80211_ATTR_IFNAME])
-    {
-        ifInfo.ifName = nla_get_string(tb_msg[NL80211_ATTR_IFNAME]);
-    }
-    else
-    {
-        ifInfo.ifName = "Unnamed/non-netdev interface";
-    }
-
-    if (tb_msg[NL80211_ATTR_IFINDEX])
-    {
-        ifInfo.ifIndex = nla_get_u32(tb_msg[NL80211_ATTR_IFINDEX]);
-    }
-    if (tb_msg[NL80211_ATTR_WDEV])
-    {
-        ifInfo.wdev = (uint64_t)nla_get_u64(tb_msg[NL80211_ATTR_WDEV]);
-    }
-    if (tb_msg[NL80211_ATTR_MAC])
-    {
-        ifInfo.mac = instance->macN2a((const unsigned char *)nla_data(tb_msg[NL80211_ATTR_MAC]));
-    }
-    if (tb_msg[NL80211_ATTR_SSID])
-    {
-        ifInfo.ssid = (const char *)nla_data(tb_msg[NL80211_ATTR_SSID]);
-    }
-    if (tb_msg[NL80211_ATTR_IFTYPE])
-    {
-        ifInfo.ifType = nla_get_u32(tb_msg[NL80211_ATTR_IFTYPE]);
-        /* if (iftype <= NL80211_IFTYPE_MAX && IF_MODES[iftype])
-        {
-            ifInfo.type = IF_MODES[iftype];
-        }
-        else
-        {
-            ifInfo.type = "unknown";
-        } */
-    }
-
-    if (tb_msg[NL80211_ATTR_WIPHY])
-    {
-        ifInfo.wiphy = nla_get_u32(tb_msg[NL80211_ATTR_WIPHY]);
-    }
-    if (tb_msg[NL80211_ATTR_WIPHY_FREQ])
-    {
-        ifInfo.freq = nla_get_u32(tb_msg[NL80211_ATTR_WIPHY_FREQ]);
-        ifInfo.channel = instance->freqToCHannel(ifInfo.freq);
-        if (tb_msg[NL80211_ATTR_CHANNEL_WIDTH])
-        {
-            ifInfo.channelWidth = nla_get_u32(tb_msg[NL80211_ATTR_CHANNEL_WIDTH]);
-            if (tb_msg[NL80211_ATTR_CENTER_FREQ1])
-            {
-                ifInfo.centerFreq1 = nla_get_u32(tb_msg[NL80211_ATTR_CENTER_FREQ1]);
-            }
-            if (tb_msg[NL80211_ATTR_CENTER_FREQ2])
-            {
-                ifInfo.centerFreq2 = nla_get_u32(tb_msg[NL80211_ATTR_CENTER_FREQ2]);
-            }
-        }
-        else if (tb_msg[NL80211_ATTR_WIPHY_CHANNEL_TYPE])
-        {
-            ifInfo.channelType = nla_get_u32(tb_msg[NL80211_ATTR_WIPHY_CHANNEL_TYPE]);
-        }
-    }
-
-    if (tb_msg[NL80211_ATTR_WIPHY_TX_POWER_LEVEL])
-    {
-        int32_t txp = nla_get_u32(tb_msg[NL80211_ATTR_WIPHY_TX_POWER_LEVEL]);
-        ifInfo.txdBm = txp % 100;
-        ifInfo.txdBm += txp / 100;
-    }
-
-    if (tb_msg[NL80211_ATTR_IFINDEX])
-    {
-        instance->interfaces.push_back(ifInfo);
-    }
-
-    return NL_OK;
-}
-
-int WiFIController::processGetInterfaceInfoHandler(struct nl_msg *msg, void *arg)
-{
-    struct genlmsghdr *gnlh = (genlmsghdr *)nlmsg_data(nlmsg_hdr(msg));
-    struct nlattr *tb_msg[NL80211_ATTR_MAX + 1];
-
-    nla_parse(tb_msg, NL80211_ATTR_MAX, genlmsg_attrdata(gnlh, 0),
-              genlmsg_attrlen(gnlh, 0), NULL);
-    WiFIController *wc = (WiFIController *)arg;
-
-    if (tb_msg[NL80211_ATTR_IFNAME])
-    {
-        wc->currentInterfaceInfo.ifName = nla_get_string(tb_msg[NL80211_ATTR_IFNAME]);
-    }
-    else
-    {
-        wc->currentInterfaceInfo.ifName = "Unnamed/non-netdev interface";
-        return NL_OK;
-    }
-
-    if (tb_msg[NL80211_ATTR_IFINDEX])
-    {
-        wc->currentInterfaceInfo.ifIndex = nla_get_u32(tb_msg[NL80211_ATTR_IFINDEX]);
-    }
-    else
-    {
-        wc->currentInterfaceInfo.ifIndex = 0;
-    }
-
-    if (tb_msg[NL80211_ATTR_WDEV])
-    {
-        wc->currentInterfaceInfo.wdev = (uint64_t)nla_get_u64(tb_msg[NL80211_ATTR_WDEV]);
-    }
-    else
-    {
-        wc->currentInterfaceInfo.wdev = 0;
-    }
-
-    if (tb_msg[NL80211_ATTR_MAC])
-    {
-        wc->currentInterfaceInfo.mac = wc->macN2a((const unsigned char *)nla_data(tb_msg[NL80211_ATTR_MAC]));
-    }
-    else
-    {
-        wc->currentInterfaceInfo.mac = "";
-    }
-
-    if (tb_msg[NL80211_ATTR_SSID])
-    {
-        wc->currentInterfaceInfo.ssid = (const char *)nla_data(tb_msg[NL80211_ATTR_SSID]);
-    }
-    else
-    {
-        wc->currentInterfaceInfo.ssid = "";
-    }
-
-    if (tb_msg[NL80211_ATTR_IFTYPE])
-    {
-        wc->currentInterfaceInfo.ifType = nla_get_u32(tb_msg[NL80211_ATTR_IFTYPE]);
-    }
-    else
-    {
-        wc->currentInterfaceInfo.ifType = 0;
-    }
-
-    if (tb_msg[NL80211_ATTR_WIPHY])
-    {
-        wc->currentInterfaceInfo.wiphy = nla_get_u32(tb_msg[NL80211_ATTR_WIPHY]);
-    }
-    else
-    {
-        wc->currentInterfaceInfo.wiphy = 0;
-    }
-
-    if (tb_msg[NL80211_ATTR_WIPHY_FREQ])
-    {
-        wc->currentInterfaceInfo.freq = nla_get_u32(tb_msg[NL80211_ATTR_WIPHY_FREQ]);
-        wc->currentInterfaceInfo.channel = wc->freqToCHannel(wc->currentInterfaceInfo.freq);
-    }
-    else
-    {
-        wc->currentInterfaceInfo.freq = 0;
-        wc->currentInterfaceInfo.channel = 0;
-    }
-
-    if (tb_msg[NL80211_ATTR_WIPHY_TX_POWER_LEVEL])
-    {
-        int32_t txp = nla_get_u32(tb_msg[NL80211_ATTR_WIPHY_TX_POWER_LEVEL]);
-        wc->currentInterfaceInfo.txdBm = txp % 100;
-        wc->currentInterfaceInfo.txdBm += txp / 100;
-    }
-    else
-    {
-        wc->currentInterfaceInfo.txdBm = 0;
-    }
-
-    return NL_OK;
-}
-
-std::string WiFIController::macN2a(const unsigned char *arg)
-{
+std::string WiFIController::mac_n2a(const unsigned char* arg) {
     int i, l;
     char mac_addr[20];
 
     l = 0;
-    for (i = 0; i < ETH_ALEN; i++)
-    {
-        if (i == 0)
-        {
+    for (i = 0; i < ETH_ALEN; i++) {
+        if (i == 0) {
             sprintf(mac_addr + l, "%02x", arg[i]);
             l += 2;
-        }
-        else
-        {
+        } else {
             sprintf(mac_addr + l, ":%02x", arg[i]);
             l += 3;
         }
@@ -772,8 +724,44 @@ std::string WiFIController::macN2a(const unsigned char *arg)
     return ret;
 }
 
-int WiFIController::freqToCHannel(int freq)
-{
+bool WiFIController::mac_a2n(const std::string& mac, unsigned char* out) {
+    auto hexval = [](char c) -> int {
+        if (c >= '0' && c <= '9')
+            return c - '0';
+        if (c >= 'a' && c <= 'f')
+            return 10 + (c - 'a');
+        if (c >= 'A' && c <= 'F')
+            return 10 + (c - 'A');
+        return -1;
+    };
+
+    int hi = -1;          // high nibble (or -1 if expecting a high nibble)
+    std::size_t idx = 0;  // number of bytes written
+
+    for (char c : mac) {
+        // Skip common separators
+        if (c == ':' || c == '-' || c == ' ' || c == '\t')
+            continue;
+
+        int v = hexval(c);
+        if (v < 0)
+            return false;  // non-hex character
+
+        if (hi < 0) {
+            hi = v;  // store high nibble
+        } else {
+            if (idx >= ETH_ALEN)
+                return false;  // too many hex digits
+            out[idx++] = static_cast<unsigned char>((hi << 4) | v);
+            hi = -1;  // reset for next byte
+        }
+    }
+
+    // Must end on a full byte and have exactly 6 bytes
+    return (hi == -1) && (idx == ETH_ALEN);
+}
+
+int WiFIController::frequencyToChannel(int freq) {
     if (freq < 1000)
         return 0;
     /* see 802.11-2007 17.3.8.3.2 and Annex J */
@@ -795,47 +783,4 @@ int WiFIController::freqToCHannel(int freq)
         return (freq - 56160) / 2160;
     else
         return 0;
-}
-
-int WiFIController::phyLookup(char *name)
-{
-    char buf[200];
-    int fd, pos;
-
-    snprintf(buf, sizeof(buf), "/sys/class/ieee80211/%s/index", name);
-
-    fd = open(buf, O_RDONLY);
-    if (fd < 0)
-        return -1;
-    pos = read(fd, buf, sizeof(buf) - 1);
-    if (pos < 0)
-    {
-        close(fd);
-        return -1;
-    }
-    buf[pos] = '\0';
-    close(fd);
-    return atoi(buf);
-}
-
-int WiFIController::setApMode()
-{
-    Cmd cmd{
-        .id = NL80211_CMD_SET_INTERFACE,
-        .idby = CIB_NETDEV,
-        .nlFlags = 0,
-        .device = if_nametoindex(AP_INTERFACE_NAME),
-        .handler = this->setApModeHandler,
-        .valid_handler = NULL,
-    };
-
-    return this->nlExecCommand(cmd);
-}
-
-int WiFIController::setApModeHandler(struct nl80211_state *state, struct nl_msg *msg, void *arg)
-{
-    NLA_PUT_U32(msg, NL80211_ATTR_IFTYPE, NL80211_IFTYPE_AP);
-    return 0;
-nla_put_failure:
-    return -ENOBUFS;
 }

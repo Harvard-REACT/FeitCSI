@@ -6,6 +6,8 @@
 /.vscode/
 MainWindow.glade~
 poznamky
+.cache
+compile_commands.json
 
 
 # Ignore compiled sources in any directory

@@ -1,4 +1,24 @@
-# FeitCSI, the 802.11 CSI tool
+# React FeitCSI Fork
+
+This fork contains our modifications to get FeitCSI working for the purposes of collecting CSI from a variety of Intel WiFi cards on boards with multiple wireless interfaces.
+
+## Building
+To build and install FeitCSI: 
+
+```
+make -j$(nproc)
+sudo make install
+```
+
+If the Makefile changes, be sure to use `bear` to regenerate the compile commands:
+
+```
+bear -- make -j$(nproc)
+```
+
+This is essential for getting proper Intellisense/LSP-support for the project using clangd.
+
+## FeitCSI, the 802.11 CSI tool
 
 Visit [https://feitcsi.kuskosoft.com](https://feitcsi.kuskosoft.com) to view the full documentation.
 

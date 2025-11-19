@@ -19,26 +19,24 @@
 #ifndef MAIN_CONTROLLER_H
 #define MAIN_CONTROLLER_H
 
-#include "WiFiCsiController.h"
-#include "WiFIController.h"
+#include <thread>
+#include "Csi.h"
 #include "PacketInjector.h"
+#include "UdpSocket.h"
+#include "WiFIController.h"
+#include "WiFiCsiController.h"
 #include "gui/MainWindow.h"
 #include "gui/Plot.h"
-#include "Csi.h"
-#include "UdpSocket.h"
-#include <thread>
 
-class MainController
-{
+class MainController {
+   public:
+    inline static UdpSocket* udpSocket = nullptr;
 
-public:
-    inline static UdpSocket *udpSocket = nullptr;
+    Plot* plotAmplitude;
 
-    Plot *plotAmplitude;
+    Plot* plotPhase;
 
-    Plot *plotPhase;
-
-    static MainController *getInstance();
+    static MainController* getInstance();
 
     static gint updatePlots();
 
@@ -57,21 +55,21 @@ public:
     void runUdpSocket();
 
     void initInterface();
-    
+
     void restoreState();
-    
+
     ~MainController();
 
-private:
+   private:
     MainController();
 
-    inline static MainController *INSTANCE = nullptr;
+    inline static MainController* instance = nullptr;
 
-    inline static MainWindow *mainWindow = nullptr;
+    inline static MainWindow* mainWindow = nullptr;
 
     Glib::RefPtr<Gtk::Application> app;
 
-    inline static Csi *csiToPlot = nullptr;
+    inline static Csi* csiToPlot = nullptr;
 
     guint updatePlotsSourceId = 0;
 
@@ -87,17 +85,17 @@ private:
 
     WiFIController wifiController;
 
-    std::vector<InterfaceInfo> bkpInterfaces;
+    std::vector<InterfaceInfo> interfacesToRestore;
 
-    static void *measureCsi(void *arg);
+    static void* measureCsi(void* arg);
 
     static void intHandler(int dummy);
 
-    static void *injectPackets(void *arg);
+    static void* injectPackets(void* arg);
 
-    static void *ftm(void *arg);
+    static void* ftm(void* arg);
 
-    static void *ftmResponder(void *arg);
+    static void* ftmResponder(void* arg);
 
     bool measuring = false;
 

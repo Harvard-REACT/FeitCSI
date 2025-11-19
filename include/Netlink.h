@@ -20,56 +20,50 @@
 #define NETLINK_H
 
 #include <linux/netlink.h>
-#include <netlink/msg.h>
 #include <linux/nl80211.h>
-
-#include <string>
-#include <vector>
+#include <netlink/msg.h>
 
 #define ARRAY_SIZE(ar) (sizeof(ar) / sizeof(ar[0]))
 
-enum commandIdentifiedBy
-{
+enum commandIdentifiedBy {
     CIB_NONE,
     CIB_PHY,
     CIB_NETDEV,
     CIB_WDEV,
 };
 
-struct nl80211_state
-{
-    struct nl_sock *nl_sock;
+struct nl80211_state {
+    struct nl_sock* gnl_socket; /* Generic Netlink Socket */
+    struct nl_sock* rnl_socket; /* Route Netlink Socket   */
     int nl80211_id;
 };
 
-struct Cmd
-{
+struct Cmd {
     uint8_t id;
     commandIdentifiedBy idby;
     int nlFlags;
     signed long long device;
-    int (*handler)(struct nl80211_state *state, struct nl_msg *msg, void *arg);
-    int (*valid_handler)(struct nl_msg *msg, void *arg);
-    void *args;
+    int (*pre_execute_handler)(struct nl80211_state* state, struct nl_msg* msg, void* arg);
+    int (*valid_handler)(struct nl_msg* msg, void* arg);
+    void* pre_execute_handler_args;
+    void* valid_handler_args;
 };
 
-class Netlink
-{
-
-public:
+class Netlink {
+   public:
     void init();
 
-protected:
-    int nlExecCommand(Cmd &cmd);
-
-private:
+   protected:
     struct nl80211_state nlstate;
-    int nlInit(struct nl80211_state *state);
+    int nlExecCommand(Cmd& cmd);
 
-    static int error_handler(sockaddr_nl *nla, nlmsgerr *err, void *arg);
-    static int finish_handler(nl_msg *msg, void *arg);
-    static int ack_handler(nl_msg *msg, void *arg);
-    static int nlValidHandler(nl_msg *msg, void *arg);
+   private:
+    int nlInit(struct nl80211_state* state);
+
+    static int error_handler(sockaddr_nl* nla, nlmsgerr* err, void* arg);
+    static int finish_handler(nl_msg* msg, void* arg);
+    static int ack_handler(nl_msg* msg, void* arg);
+    static int nlValidHandler(nl_msg* msg, void* arg);
 };
 
 #endif

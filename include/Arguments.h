@@ -19,16 +19,15 @@
 #ifndef ARGUMENTS_PARSER_H
 #define ARGUMENTS_PARSER_H
 
-#include <string>
+#include <argp.h>
 #include <cstdint>
 #include <map>
-#include <argp.h>
+#include <string>
 #include "main.h"
 
 #define ETH_ALEN 6
 
-struct Args
-{
+struct Args {
     bool strict;
     bool verbose;
     uint16_t frequency;
@@ -45,6 +44,7 @@ struct Args
     uint16_t guardInterval;
     uint32_t injectDelay;
     uint32_t injectRepeat;
+    uint32_t phy;
     std::string coding;
     std::string format;
     bool inject;
@@ -65,19 +65,16 @@ struct Args
     std::map<enum processor, bool> processors;
 };
 
-class Arguments
-{
-
-public:
+class Arguments {
+   public:
     inline static struct Args arguments;
 
     static void init();
-    static void parse(int argc, char *argv[]);
+    static void parse(int argc, char* argv[]);
 
-    static error_t parse_opt(int key, char *arg, argp_state *state);
+    static error_t parse_opt(int key, char* arg, argp_state* state);
 
-private:
-
+   private:
     /* Program documentation. */
     inline static char doc[] =
         "FeitCSI - FeitCSI, the tool that enables CSI extraction and injection IEEE 802.11 frames";
@@ -88,7 +85,8 @@ private:
     /* The options we understand. */
     inline static struct argp_option options[] = {
         {"frequency", 'f', "FREQUENCY", 0, "Frequency to measure/inject CSI"},
-        {"channel-width", 'w', "CHANNELWIDTH", 0, "Channel width to measure/inject CSI. Possible values [20|40|HT40-|80|160]"},
+        {"channel-width", 'w', "CHANNELWIDTH", 0,
+         "Channel width to measure/inject CSI. Possible values [20|40|HT40-|80|160]"},
         {"output-file", 'o', "FILE", 0, "Output file where measurements should be stored."},
         {"mcs", 'm', "MCS", 0, "Mcs index [0-11]"},
         {"format", 'r', "FORMAT", 0, "Data frame format [NOHT|HT|VHT|HESU]"},
@@ -97,8 +95,10 @@ private:
         {"ltf", 'l', "LTF", 0, "HE LTF [2xLTF+0.8|2xLTF+1.6|4xLTF+3.2|4xLTF+0.8]"},
         {"coding", 'c', "CODING", 0, "Coding scheme [LDPC|BCC]"},
         {"tx-power", 't', "TXPOWER", 0, "TX power of antenna in dBm [1-22]"},
+        {"phy", '@', "PHY", 0, "PHY INDEX TO CREATE THE INTERFACE ON"},
         {"antenna", 'a', "ANTENNA", 0, "Transmitting antenna 1, 2 or 12 for both"},
-        {"mode", 'i', "MODE", 0, "Mode of program[measure|inject|measureinject|ftm|ftmres|injectftmres|measureftm]"},
+        {"mode", 'i', "MODE", 0,
+         "Mode of program[measure|inject|measureinject|ftm|ftmres|injectftmres|measureftm]"},
         {"inject-delay", 'd', "INJECTDELAY", 0, "Delay between frame injections is us"},
         {"inject-repeat", 'j', "INJECTREPEAT", 0, "How many times inject frame"},
         {"verbose", 'v', 0, OPTION_ARG_OPTIONAL, "Produce verbose output"},
@@ -111,9 +111,13 @@ private:
         {"ftm-burst-period", 'h', "FTMBURSTPERIOD", 0, "FTM burst period"},
         {"ftm-burst-duration", 'k', "FTMBURTSDURATION", 0, "FTM burst duration"},
         {"ftm-mac", 'n', "FTMMAC", 0, "FTM target MAC address xx:xx:xx:xx:xx:xx"},
-        {"mode-delay", 'y', "SWAPTIME", 0, "Delay in ms between inject and ftm responder or measure and ftm initiator when modes are injectftmres|measureftm"},
-        {"strict", 'z', 0, OPTION_ARG_OPTIONAL, "Strict mode: filter out values that do not contain a specific MCS"},
-        {"mac", '#', "MAC", 0, "Default NICs MAC will be change to providing MAC xx:xx:xx:xx:xx:xx"},
+        {"mode-delay", 'y', "SWAPTIME", 0,
+         "Delay in ms between inject and ftm responder or measure and ftm initiator when modes are "
+         "injectftmres|measureftm"},
+        {"strict", 'z', 0, OPTION_ARG_OPTIONAL,
+         "Strict mode: filter out values that do not contain a specific MCS"},
+        {"mac", '#', "MAC", 0,
+         "Default NICs MAC will be change to providing MAC xx:xx:xx:xx:xx:xx"},
         {0}};
 };
 
