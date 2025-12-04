@@ -49,11 +49,9 @@ $(BIN): $(OBJS)
 
 install: all
 	cp $(BIN) /usr/local/bin/feitcsi
-	cp $(NS_SCRIPT) /usr/local/bin/csi-netns.sh
 
 uninstall:
 	rm /usr/local/bin/feitcsi
-	rm /usr/local/bin/csi-netns.sh
 
 clean:
 	@$(RM) $(BIN)
