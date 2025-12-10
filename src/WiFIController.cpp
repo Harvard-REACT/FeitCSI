@@ -528,9 +528,9 @@ void rfkill_unblock() {
 
     // Check the return value to see if the command was successful
     if (result == 0) {
-        std::cout << "Successfully executed: " << command << std::endl;
+        Logger::log(info) << "Successfully executed: " << command;
     } else {
-        std::cerr << "Failed to execute: " << command << ". Return code: " << result << std::endl;
+        Logger::log(error) << "Failed to execute: " << command << ". Return code: " << result;
         // You might want to check errno for more specific error details if needed
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(250));

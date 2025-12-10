@@ -79,6 +79,11 @@ void Csi::save() {
             ~(std::filesystem::perms::owner_exec | std::filesystem::perms::group_exec |
               std::filesystem::perms::others_exec),
         std::filesystem::perm_options::add);
+
+    std::cout.write(reinterpret_cast<const char*>(&this->rawHeaderData), sizeof(RawHeaderData));
+    std::cout.write(reinterpret_cast<const char*>(this->rawCsiData),
+                    this->rawHeaderData.csiDataSize);
+    std::cout.flush();
 }
 
 void Csi::sendUDP(UdpSocket* udpSocket) {

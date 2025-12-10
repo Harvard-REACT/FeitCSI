@@ -20,20 +20,19 @@
 #define MAIN_WINDOW_H
 
 #include <gtkmm.h>
-#include "gui/Plot.h"
 #include "gui/CsiProcessingWindow.h"
+#include "gui/Plot.h"
 
-class MainWindow : public Gtk::ApplicationWindow
-{
+class MainWindow : public Gtk::ApplicationWindow {
     Glib::RefPtr<Gtk::Builder> ui;
 
-public:
-    MainWindow(BaseObjectType *obj, Glib::RefPtr<Gtk::Builder> const &builder);
+   public:
+    MainWindow(BaseObjectType* obj, Glib::RefPtr<Gtk::Builder> const& builder);
     void fatalError(std::string msg);
 
     Glib::RefPtr<Gtk::Builder> builder;
 
-private:
+   private:
     int chartWidth = 0;
     int chartHeight = 0;
     bool measuring = false;
@@ -68,10 +67,10 @@ private:
     Glib::RefPtr<Gtk::Label> errorMessages;
 
     Plot plot;
-    
+
     void closeButton();
 
-    bool onWindowDelete(GdkEventAny *event);
+    bool onWindowDelete(GdkEventAny* event);
 
     void onWindowInit();
 
@@ -106,7 +105,7 @@ private:
     void measureButtonClicked();
 
     void injectButtonClicked();
-    
+
     void updateSensitivity();
 };
 

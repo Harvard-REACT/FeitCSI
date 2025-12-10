@@ -105,7 +105,6 @@ int WiFiCsiController::processListenToCsiHandler(struct nl_msg* msg, void* arg) 
                     (c->format == RATE_MCS_EHT_MSK && Arguments::arguments.format == "EHT")
 
                 ) {
-                    printf("masm csi\n");
                     if (!Arguments::arguments.strict ||
                         (Arguments::arguments.strict &&
                          (c->rawHeaderData.rateNflag & RATE_LEGACY_RATE_MSK) ==

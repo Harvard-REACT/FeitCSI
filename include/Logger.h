@@ -75,11 +75,11 @@ class Logger {
         if (Logger::guiOutput) {
             std::stringstream ss;
             ss << v;
-            std::cout << ss.str();
+            std::cerr << ss.str();
             std::string* d = new std::string(ss.str());
             gdk_threads_add_idle(guiLog, (void*)d);
         } else {
-            std::cout << v;
+            std::cerr << v;
         }
 
         return *this;
