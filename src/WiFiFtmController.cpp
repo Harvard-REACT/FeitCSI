@@ -83,7 +83,9 @@ int WiFiFtmController::ftmHandler(struct nl80211_state* state, struct nl_msg* ms
     peers = nla_nest_start(msg, NL80211_PMSR_ATTR_PEERS);
 
     peer = nla_nest_start(msg, 1);  // TODO multiple peers
-    NLA_PUT(msg, NL80211_PMSR_PEER_ATTR_ADDR, ETH_ALEN, Arguments::arguments.ftmTargetMac);
+    // TODO : FIX THIS
+    throw std::runtime_error("FTM target MAC address not set.");
+    // NLA_PUT(msg, NL80211_PMSR_PEER_ATTR_ADDR, ETH_ALEN, Arguments::arguments.ftmTargetMac);
 
     req = nla_nest_start(msg, NL80211_PMSR_PEER_ATTR_REQ);
     reqdata = nla_nest_start(msg, NL80211_PMSR_REQ_ATTR_DATA);

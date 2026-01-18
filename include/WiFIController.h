@@ -24,6 +24,7 @@
 #include <iw/nl80211.h> */
 #include <linux/netlink.h>
 #include <linux/nl80211.h>
+#include <net/ethernet.h>
 #include <netlink/msg.h>
 #include "Netlink.h"
 
@@ -257,7 +258,7 @@ class WiFIController : public Netlink {
     void createMonitorInterface(uint32_t phy_index,
                                 uint32_t frequency,
                                 uint32_t tx_power_dbm,
-                                const unsigned char* mac);
+                                const std::array<uint8_t, ETH_ALEN>& mac);
     void createApInterface(uint32_t phy_index,
                            uint32_t frequency,
                            uint32_t tx_power_dbm,

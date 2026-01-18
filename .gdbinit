@@ -1,3 +1,6 @@
 layout src
+set inferior-tty /dev/pts/2
+b initInterface
+b createMonitorInterface
 
-r --mode measureinject --frequency 5500 --channel-width 40 --format VHT --inject-delay 10000 --output-file othello_tx_channel_104_vht20.dat -v
+r --mode inject --frequency 5520 --channel-width 20 --format VHT --inject-delay 15000 --tx-power 20 --mac 11:23:58:13:21:34,2a:2a:2a:2a:2a:2a -v

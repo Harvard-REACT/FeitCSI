@@ -20,7 +20,9 @@
 #include <string.h>
 #include "Arguments.h"
 #include "Logger.h"
-#include "main.h"
+#include "ieee80211_radiotap.h"
+#include "rs.h"
+#include "utils.h"
 
 #define SPATIAL_STREAM 16
 
@@ -30,33 +32,33 @@ uint8_t ieee80211Header[] = {0xe0, 0x80, 0x00, 0x00, 0x00, 0x16, 0xea, 0x12, 0x3
 
 uint8_t ieee80211Body[] = {};
 
-void PacketInjector::inject() {
+void PacketInjector::inject(const std::array<uint8_t, ETH_ALEN>& mac) {
     if (Arguments::arguments.verbose) {
         Logger::log(info) << "Injecting " << Arguments::arguments.format << "\n";
     }
 
     if (Arguments::arguments.format == "NOHT") {
-        this->injectNoHT();
+        this->injectNoHT(mac);
     } else if (Arguments::arguments.format == "HT") {
-        this->injectHT();
+        this->injectHT(mac);
     } else if (Arguments::arguments.format == "VHT") {
-        this->injectVHT();
+        this->injectVHT(mac);
     } else if (Arguments::arguments.format == "HESU") {
-        this->injectHE();
+        this->injectHE(mac);
     }
 }
 
-void PacketInjector::injectNoHT() {
+void PacketInjector::injectNoHT(const std::array<uint8_t, ETH_ALEN>& mac) {
     uint8_t mcs = 0;
     if (RATE_LEGACY_RATE_MSK >= Arguments::arguments.mcs) {
         mcs = RATE_LEGACY_RATE_MSK & Arguments::arguments.mcs;
     }
     uint32_t rateNFlags = RATE_MCS_LEGACY_OFDM_MSK | mcs | Arguments::arguments.antenna;
 
-    this->send(rateNFlags);
+    this->send(rateNFlags, mac);
 }
 
-void PacketInjector::injectHT() {
+void PacketInjector::injectHT(const std::array<uint8_t, ETH_ALEN>& mac) {
     uint8_t mcs = 0;
     if (RATE_HT_MCS_CODE_MSK >= Arguments::arguments.mcs) {
         mcs = RATE_HT_MCS_CODE_MSK & Arguments::arguments.mcs;
@@ -67,10 +69,10 @@ void PacketInjector::injectHT() {
                           (Arguments::arguments.spatialStreams == 2 ? RATE_MCS_ANT_AB_MSK : 0) |
                           (Arguments::arguments.guardInterval == 400 ? RATE_MCS_SGI_MSK : 0) |
                           (Arguments::arguments.coding == "LDPC" ? RATE_MCS_LDPC_MSK : 0);
-    this->send(rateNFlags);
+    this->send(rateNFlags, mac);
 }
 
-void PacketInjector::injectVHT() {
+void PacketInjector::injectVHT(const std::array<uint8_t, ETH_ALEN>& mac) {
     uint8_t mcs = 0;
     if (RATE_MCS_CODE_MSK >= Arguments::arguments.mcs) {
         mcs = RATE_MCS_CODE_MSK & Arguments::arguments.mcs;
@@ -83,10 +85,10 @@ void PacketInjector::injectVHT() {
                           (Arguments::arguments.spatialStreams == 2 ? RATE_MCS_ANT_AB_MSK : 0) |
                           (Arguments::arguments.guardInterval == 400 ? RATE_MCS_SGI_MSK : 0) |
                           (Arguments::arguments.coding == "LDPC" ? RATE_MCS_LDPC_MSK : 0);
-    this->send(rateNFlags);
+    this->send(rateNFlags, mac);
 }
 
-void PacketInjector::injectHE() {
+void PacketInjector::injectHE(const std::array<uint8_t, ETH_ALEN>& mac) {
     uint8_t mcs = 0;
     if (RATE_MCS_CODE_MSK >= Arguments::arguments.mcs) {
         mcs = RATE_MCS_CODE_MSK & Arguments::arguments.mcs;
@@ -111,10 +113,10 @@ void PacketInjector::injectHE() {
                           (Arguments::arguments.channelWidth == 160 ? RATE_MCS_CHAN_WIDTH_160 : 0) |
                           (Arguments::arguments.spatialStreams == 2 ? SPATIAL_STREAM : 0) |
                           (Arguments::arguments.spatialStreams == 2 ? RATE_MCS_ANT_AB_MSK : 0);
-    this->send(rateNFlags);
+    this->send(rateNFlags, mac);
 }
 
-void PacketInjector::send(uint32_t rateNFlags) {
+void PacketInjector::send(uint32_t rateNFlags, const std::array<uint8_t, ETH_ALEN>& mac) {
     uint32_t pos = 0;
     struct ieee80211_radiotap_header rthdr;
     rthdr.it_version = 0;
@@ -137,24 +139,26 @@ void PacketInjector::send(uint32_t rateNFlags) {
 
     int totalSize = rthdr.it_len + sizeof(ieee80211Header) + sizeof(ieee80211Body);
 
-    char szErrbuf[500];
+    const std::string ifname = mon_ifname_for_mac(mac);
 
-    if (ppcap == nullptr) {
-        ppcap = pcap_open_live(MONITOR_INTERFACE_NAME, 800, 1, 20, szErrbuf);
+    char errbuf[PCAP_ERRBUF_SIZE];
+
+    pcap_t*& handle = pcaps_[ifname];
+    if (!handle) {
+        handle = pcap_open_live(ifname.c_str(), 800, 1, 20, errbuf);
+        if (!handle) {
+            Logger::log(error) << "Failed to open pcap for " << ifname << ": " << errbuf << "\n";
+            return;
+        }
     }
 
-    if (ppcap == nullptr) {
-        Logger::log(error) << "Failed to open pcap for injection: " << szErrbuf << "\n";
+    int r = pcap_inject(handle, sendBuffer, totalSize);
+    if (r != totalSize) {
+        Logger::log(error) << "pcap_inject failed on " << ifname << "\n";
+        // optional: close and reopen next time
+        pcap_close(handle);
+        handle = nullptr;
+        pcaps_.erase(ifname);
         return;
     }
-
-    int r = pcap_inject(ppcap, sendBuffer, totalSize);
-    if (r != totalSize) {
-        // pcap_perror(ppcap, "Failed to inject packet");
-        pcap_close(ppcap);
-        ppcap = nullptr;
-        // throw std::ios_base::failure("Failed to inject packet\n");
-    }
-
-    // pcap_close(ppcap);
 }

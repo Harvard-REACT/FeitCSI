@@ -21,8 +21,7 @@
 
 #include "Netlink.h"
 
-struct __attribute__((__packed__)) Ftm
-{
+struct __attribute__((__packed__)) Ftm {
     uint32_t burstIndex;
     uint32_t numFtmrAttempts;
     uint32_t numFtmrSuccesses;
@@ -38,26 +37,23 @@ struct __attribute__((__packed__)) Ftm
     uint64_t distVariance;
     uint64_t distSpread;
     uint64_t timestamp;
-}; // size 79 bytes
+};  // size 79 bytes
 
 #define FTM_SIZE sizeof(Ftm)
 
-class WiFiFtmController : public Netlink
-{
-
-public:
+class WiFiFtmController : public Netlink {
+   public:
     void init();
     int startInitiator();
     int startResponder();
     int setApMode();
     uint64_t lastRttIsSuccess = false;
 
-private:
-
-    static int ftmHandler(nl80211_state *state, nl_msg *msg, void *arg);
-    static int ftmResponderHandler(nl80211_state *state, nl_msg *msg, void *arg);
-    static int setApModeHandler(nl80211_state *state, nl_msg *msg, void *arg);
-    static int processFtmHandler(nl_msg *msg, void *arg);
+   private:
+    static int ftmHandler(nl80211_state* state, nl_msg* msg, void* arg);
+    static int ftmResponderHandler(nl80211_state* state, nl_msg* msg, void* arg);
+    static int setApModeHandler(nl80211_state* state, nl_msg* msg, void* arg);
+    static int processFtmHandler(nl_msg* msg, void* arg);
 };
 
 #endif

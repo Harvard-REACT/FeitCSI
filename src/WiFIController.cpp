@@ -22,6 +22,7 @@
 #include "Netlink.h"
 #include "main.h"
 #include "nl80211.h"
+#include "utils.h"
 
 #include <errno.h>
 #include <iwlib.h>
@@ -539,26 +540,31 @@ void rfkill_unblock() {
 void WiFIController::createMonitorInterface(uint32_t phy_index,
                                             uint32_t frequency,
                                             uint32_t tx_power_dbm,
-                                            const unsigned char* mac) {
+                                            const std::array<uint8_t, ETH_ALEN>& mac) {
     int err;
-    if (createInterface(MONITOR_INTERFACE_NAME, NL80211_IFTYPE_MONITOR, mac, phy_index) < 0) {
-        Logger::log(error) << "Failed to create monitor mode interface\n";
+    const std::string ifname = mon_ifname_for_mac(mac);
+
+    Logger::log(info) << "Creating monitor interface " << ifname << "\n";
+    if (createInterface(ifname, NL80211_IFTYPE_MONITOR, mac.data(), phy_index) < 0) {
+        Logger::log(error) << "Failed to create monitor mode interface " << ifname << "\n";
         return;
     }
 
-    if (setInterfaceStatus(MONITOR_INTERFACE_NAME, true) < 0) {
-        Logger::log(error) << "Failed to set interface to up\n";
+    if (setInterfaceStatus(ifname, true) < 0) {
+        Logger::log(error) << "Failed to set interface " << ifname << " up\n";
         return;
-    };
+    }
 
     std::this_thread::sleep_for(std::chrono::milliseconds(250));
 
-    while ((err = setInterfaceFrequency(MONITOR_INTERFACE_NAME, frequency,
+    while ((err = setInterfaceFrequency(ifname, frequency,
                                         Arguments::arguments.bandwidth.c_str())) < 0) {
-        Logger::log(error) << "Failed to set frequency (" << err << ")\n";
+        Logger::log(error) << "Failed to set frequency on " << ifname << " (" << err << ")\n";
         rfkill_unblock();
         std::this_thread::sleep_for(std::chrono::milliseconds(250));
     }
+
+    Logger::log(info) << "Frequency set to " << frequency << " MHz on " << ifname << "\n";
 }
 
 void WiFIController::createApInterface(uint32_t phy_index,

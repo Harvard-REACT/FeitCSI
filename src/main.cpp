@@ -16,50 +16,34 @@
  * along with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include <iostream>
-#include <thread>
 #include <chrono>
-#include "Csi.h"
-#include "WiFIController.h"
-#include "WiFiCsiController.h"
-#include "Netlink.h"
-#include "main.h"
-#include "PacketInjector.h"
-#include "MainController.h"
-#include "Logger.h"
 #include "Arguments.h"
+#include "Logger.h"
+#include "MainController.h"
 
-int main(int argc, char *argv[])
-{
+int main(int argc, char* argv[]) {
     Arguments args;
-    args.init();
     args.parse(argc, argv);
 
-    if (Arguments::arguments.outputFile.empty())
-    {
+    if (Arguments::arguments.outputFile.empty()) {
         const auto t = std::chrono::system_clock::now();
-        int64_t tInt = std::chrono::duration_cast<std::chrono::seconds>(t.time_since_epoch()).count();
+        int64_t tInt =
+            std::chrono::duration_cast<std::chrono::seconds>(t.time_since_epoch()).count();
         Arguments::arguments.outputFile = "FeitCSI_" + std::to_string(tInt) + ".dat";
     }
 
     // all arguments ok and sanitized go next
 
-    MainController *mainController = MainController::getInstance();
-    if (Arguments::arguments.gui)
-    {
+    MainController* mainController = MainController::getInstance();
+    if (Arguments::arguments.gui) {
         mainController->runGui();
-    }
-    else if (Arguments::arguments.udpSocket)
-    {
+    } else if (Arguments::arguments.udpSocket) {
         mainController->runUdpSocket();
-    }
-    else
-    {
+    } else {
         mainController->runNoGui();
     }
 
-    if (Arguments::arguments.verbose)
-    {
+    if (Arguments::arguments.verbose) {
         Logger::log(info) << "Exiting...\n";
     }
     return 0;

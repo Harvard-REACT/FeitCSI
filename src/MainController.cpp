@@ -17,12 +17,14 @@
  */
 
 #include "MainController.h"
+#include <optional>
 #include "Arguments.h"
 #include "Logger.h"
 #include "WiFiFtmController.h"
 #include "gui/MainWindow.h"
 #include "layout.h"
 #include "main.h"
+#include "utils.h"
 
 MainController::MainController() {
     signal(SIGINT, [](int signum) {
@@ -125,9 +127,11 @@ void MainController::measureCsi(bool stop) {
         pthread_cancel(this->measureCsiThread);
     } else {
         this->measuring = true;
+
+        const auto& mac0 = Arguments::arguments.macs.front();
+        const std::string mon0 = mon_ifname_for_mac(mac0);
         if (this->wifiController.setInterfaceFrequency(
-                MONITOR_INTERFACE_NAME, Arguments::arguments.frequency,
-                Arguments::arguments.bandwidth.c_str()) < 0) {
+                mon0, Arguments::arguments.frequency, Arguments::arguments.bandwidth.c_str()) < 0) {
             Logger::log(error) << "Failed to set frequency\n";
         };
         pthread_create(&this->measureCsiThread, NULL, &MainController::measureCsi, NULL);
@@ -148,10 +152,12 @@ void MainController::injectPackets(bool stop) {
         pthread_cancel(this->injectPacketThread);
     } else {
         this->injecting = true;
-        if (this->wifiController.setInterfaceFrequency(
-                MONITOR_INTERFACE_NAME, Arguments::arguments.frequency,
-                Arguments::arguments.bandwidth.c_str()) < 0) {
-            Logger::log(error) << "Failed to set frequency\n";
+        for (const auto& mac : Arguments::arguments.macs) {
+            if (this->wifiController.setInterfaceFrequency(
+                    mon_ifname_for_mac(mac), Arguments::arguments.frequency,
+                    Arguments::arguments.bandwidth.c_str()) < 0) {
+                Logger::log(error) << "Failed to set frequency\n";
+            }
         };
         pthread_create(&this->injectPacketThread, NULL, &MainController::injectPackets, NULL);
         pthread_detach(this->injectPacketThread);
@@ -261,10 +267,10 @@ void MainController::initInterface() {
         Logger::log(info) << "Obtaining all WiFi Interfaces\n";
         this->wifiController.getAllInterfaces();
 
-        uint32_t intel_phy = 0;
+        std::optional<uint32_t> intel_phy = std::nullopt;
         for (const auto& [_, interface] : this->wifiController.interfaces) {
             Logger::log(info) << "interface " << interface.ifName << "\n";
-            if (interface.ifName == "wlp4s0") {
+            if (interface.ifName == "wlp1s0") {
                 this->interfacesToRestore.push_back(interface);
                 intel_phy = interface.wiphy;
                 this->wifiController.deleteInterface(interface.ifName);
@@ -272,18 +278,20 @@ void MainController::initInterface() {
             }
         }
 
-        Logger::log(info) << "Using phy " << intel_phy << "\n";
+        if (!intel_phy.has_value()) {
+            throw std::runtime_error("No Intel WiFi interface found");
+        }
 
-        this->wifiController.createMonitorInterface(intel_phy, Arguments::arguments.frequency,
-                                                    Arguments::arguments.txPower,
-                                                    Arguments::arguments.mac);
+        Logger::log(info) << "Using phy " << intel_phy.value() << "\n";
 
-        Logger::log(info) << "Monitor interface created\n";
-        std::this_thread::sleep_for(std::chrono::milliseconds(500));
-        // this->wifiController.createApInterface(intel_phy, Arguments::arguments.frequency,
-        //                                        Arguments::arguments.txPower,
-        //                                        Arguments::arguments.mac);
-        // Logger::log(info) << "AP interface created\n";
+        for (const auto& mac : Arguments::arguments.macs) {
+            this->wifiController.createMonitorInterface(intel_phy.value(),
+                                                        Arguments::arguments.frequency,
+                                                        Arguments::arguments.txPower, mac);
+            Logger::log(info) << "Monitor interface created\n";
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        }
+
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
     } catch (const std::exception& e) {
         if (MainController::mainWindow) {
@@ -302,8 +310,9 @@ void* MainController::measureCsi(void* arg) {
         //                                                                      false) < 0) {
         //     Logger::log(error) << "Failed to take down the AP interface\n";
         // };
-        if (MainController::getInstance()->wifiController.setInterfaceStatus(MONITOR_INTERFACE_NAME,
-                                                                             true) < 0) {
+        const auto& mac0 = Arguments::arguments.macs.front();
+        const std::string mon0 = mon_ifname_for_mac(mac0);
+        if (MainController::getInstance()->wifiController.setInterfaceStatus(mon0, true) < 0) {
             Logger::log(error) << "Failed to put the monitor mode interface up";
         };
 
@@ -367,8 +376,10 @@ void* MainController::ftm(void* arg) {
                     //         AP_INTERFACE_NAME, true) < 0) {
                     //     Logger::log(error) << "Failed to take down the AP interface\n";
                     // };
+                    const auto& mac0 = Arguments::arguments.macs.front();
+                    const std::string mon0 = mon_ifname_for_mac(mac0);
                     if (MainController::getInstance()->wifiController.setInterfaceStatus(
-                            MONITOR_INTERFACE_NAME, false) < 0) {
+                            mon0, false) < 0) {
                         Logger::log(error) << "Failed to put the monitor mode interface up";
                     };
                 }
@@ -414,9 +425,10 @@ void* MainController::ftmResponder(void* arg) {
                         AP_INTERFACE_NAME, true) < 0) {
                     Logger::log(error) << "Failed to take down the AP interface\n";
                 };
-
-                if (MainController::getInstance()->wifiController.setInterfaceStatus(
-                        MONITOR_INTERFACE_NAME, false) < 0) {
+                const auto& mac0 = Arguments::arguments.macs.front();
+                const std::string mon0 = mon_ifname_for_mac(mac0);
+                if (MainController::getInstance()->wifiController.setInterfaceStatus(mon0, false) <
+                    0) {
                     Logger::log(error) << "Failed to put the monitor mode interface up";
                 };
 
@@ -448,21 +460,34 @@ void* MainController::injectPackets(void* arg) {
         //                                                                      false) < 0) {
         //     Logger::log(error) << "Failed to take down the AP interface\n";
         // };
-        if (MainController::getInstance()->wifiController.setInterfaceStatus(MONITOR_INTERFACE_NAME,
-                                                                             true) < 0) {
-            Logger::log(error) << "Failed to put the monitor mode interface up";
-        };
+
+        for (const auto& mac : Arguments::arguments.macs) {
+            auto instance = MainController::getInstance();
+
+            if (instance->wifiController.setInterfaceStatus(mon_ifname_for_mac(mac), true) < 0) {
+                Logger::log(error) << "Failed to put the monitor mode interface up";
+                continue;
+            };
+        }
 
         PacketInjector pi;
         if (Arguments::arguments.injectRepeat) {
             for (uint32_t i = 0; i < Arguments::arguments.injectRepeat; i++) {
-                pi.inject();
+                for (const auto& mac : Arguments::arguments.macs) {
+                    pi.inject(mac);
+                }
                 std::this_thread::sleep_for(
                     std::chrono::microseconds(Arguments::arguments.injectDelay));
             }
         } else {
             while (true) {
-                pi.inject();
+                for (const auto& mac : Arguments::arguments.macs) {
+                    if (mon_ifname_for_mac(mac), true < 0) {
+                        Logger::log(error) << "Failed to put the monitor mode interface up";
+                        continue;
+                    };
+                    pi.inject(mac);
+                }
                 std::this_thread::sleep_for(
                     std::chrono::microseconds(Arguments::arguments.injectDelay));
             }
@@ -488,7 +513,9 @@ void MainController::restoreState() {
         pthread_cancel(mainController->injectPacketThread);
     }
 
-    mainController->wifiController.deleteInterface(MONITOR_INTERFACE_NAME);
+    for (const auto& mac : Arguments::arguments.macs) {
+        mainController->wifiController.deleteInterface(mon_ifname_for_mac(mac));
+    }
     // mainController->wifiController.deleteInterface(AP_INTERFACE_NAME);
     for (InterfaceInfo interface : mainController->interfacesToRestore) {
         if (Arguments::arguments.verbose) {
