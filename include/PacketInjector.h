@@ -19,26 +19,25 @@
 #ifndef PACKET_INJECTOR_H
 #define PACKET_INJECTOR_H
 
+#include <pcap.h>
 #include <stdint.h>
+#include <array>
 #include "ieee80211_radiotap.h"
 #include "rs.h"
-#include <pcap.h>
 
 #define BIT(n) (0x1U << (n))
 
-class PacketInjector
-{
+class PacketInjector {
+   public:
+    void inject(const std::array<uint8_t, 6>& src);
+    void injectNoHT(const std::array<uint8_t, 6>& src);
+    void injectHT(const std::array<uint8_t, 6>& src);
+    void injectVHT(const std::array<uint8_t, 6>& src);
+    void injectHE(const std::array<uint8_t, 6>& src);
 
-public:
-    void inject();
-    void injectNoHT();
-    void injectHT();
-    void injectVHT();
-    void injectHE();
-
-private:
-    void send(uint32_t rateNFlags);
-    pcap_t *ppcap = nullptr;
+   private:
+    void send(uint32_t rateNFlags, const std::array<uint8_t, 6>& src);
+    pcap_t* ppcap = nullptr;
 };
 
 #endif

@@ -264,7 +264,7 @@ void MainController::initInterface() {
         uint32_t intel_phy = 0;
         for (const auto& [_, interface] : this->wifiController.interfaces) {
             Logger::log(info) << "interface " << interface.ifName << "\n";
-            if (interface.ifName == "wlp4s0") {
+            if (interface.ifName == "wlp1s0") {
                 this->interfacesToRestore.push_back(interface);
                 intel_phy = interface.wiphy;
                 this->wifiController.deleteInterface(interface.ifName);
@@ -276,7 +276,7 @@ void MainController::initInterface() {
 
         this->wifiController.createMonitorInterface(intel_phy, Arguments::arguments.frequency,
                                                     Arguments::arguments.txPower,
-                                                    Arguments::arguments.mac);
+                                                    Arguments::arguments.macs.front());
 
         Logger::log(info) << "Monitor interface created\n";
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
@@ -456,13 +456,17 @@ void* MainController::injectPackets(void* arg) {
         PacketInjector pi;
         if (Arguments::arguments.injectRepeat) {
             for (uint32_t i = 0; i < Arguments::arguments.injectRepeat; i++) {
-                pi.inject();
+                for (const auto& mac : Arguments::arguments.macs) {
+                    pi.inject(mac);
+                }
                 std::this_thread::sleep_for(
                     std::chrono::microseconds(Arguments::arguments.injectDelay));
             }
         } else {
             while (true) {
-                pi.inject();
+                for (const auto& mac : Arguments::arguments.macs) {
+                    pi.inject(mac);
+                }
                 std::this_thread::sleep_for(
                     std::chrono::microseconds(Arguments::arguments.injectDelay));
             }

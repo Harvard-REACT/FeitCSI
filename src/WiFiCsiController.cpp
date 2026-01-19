@@ -144,6 +144,11 @@ void WiFiCsiController::printDetail(Csi* c) {
     Logger::log(info) << "Subcarrier count: " << c->rawHeaderData.numSubCarriers << ", ";
     Logger::log(info, true) << "RX: " << +c->rawHeaderData.numRx << ", ";
     Logger::log(info, true) << "TX: " << +c->rawHeaderData.numTx << ", ";
+    Logger::log(info, true) << "MAC" << std::hex << +c->rawHeaderData.srcMac[0] << ":"
+                            << +c->rawHeaderData.srcMac[1] << ":" << +c->rawHeaderData.srcMac[2]
+                            << ":" << +c->rawHeaderData.srcMac[3] << ":"
+                            << +c->rawHeaderData.srcMac[4] << ":" << +c->rawHeaderData.srcMac[5]
+                            << std::dec << ", ";
 
     switch (c->channelWidth) {
         case RATE_MCS_CHAN_WIDTH_20:

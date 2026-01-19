@@ -539,9 +539,10 @@ void rfkill_unblock() {
 void WiFIController::createMonitorInterface(uint32_t phy_index,
                                             uint32_t frequency,
                                             uint32_t tx_power_dbm,
-                                            const unsigned char* mac) {
+                                            const std::array<uint8_t, 6>& mac) {
     int err;
-    if (createInterface(MONITOR_INTERFACE_NAME, NL80211_IFTYPE_MONITOR, mac, phy_index) < 0) {
+    if (createInterface(MONITOR_INTERFACE_NAME, NL80211_IFTYPE_MONITOR, mac.data(), phy_index) <
+        0) {
         Logger::log(error) << "Failed to create monitor mode interface\n";
         return;
     }

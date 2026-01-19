@@ -257,7 +257,7 @@ class WiFIController : public Netlink {
     void createMonitorInterface(uint32_t phy_index,
                                 uint32_t frequency,
                                 uint32_t tx_power_dbm,
-                                const unsigned char* mac);
+                                const std::array<uint8_t, 6>& mac);
     void createApInterface(uint32_t phy_index,
                            uint32_t frequency,
                            uint32_t tx_power_dbm,
