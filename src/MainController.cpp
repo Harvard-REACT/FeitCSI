@@ -17,6 +17,7 @@
  */
 
 #include "MainController.h"
+#include <optional>
 #include "Arguments.h"
 #include "Logger.h"
 #include "WiFiFtmController.h"
@@ -261,7 +262,7 @@ void MainController::initInterface() {
         Logger::log(info) << "Obtaining all WiFi Interfaces\n";
         this->wifiController.getAllInterfaces();
 
-        uint32_t intel_phy = 0;
+        std::optional<uint32_t> intel_phy = std::nullopt;
         for (const auto& [_, interface] : this->wifiController.interfaces) {
             Logger::log(info) << "interface " << interface.ifName << "\n";
             if (interface.ifName == "wlp1s0") {
@@ -271,12 +272,16 @@ void MainController::initInterface() {
                 break;
             }
         }
+        if (!intel_phy.has_value()) {
+            Logger::log(error) << "No suitable Intel WiFi interface found\n";
+            exit(-1);
+        }
 
-        Logger::log(info) << "Using phy " << intel_phy << "\n";
+        Logger::log(info) << "Using phy " << intel_phy.value() << "\n";
 
-        this->wifiController.createMonitorInterface(intel_phy, Arguments::arguments.frequency,
-                                                    Arguments::arguments.txPower,
-                                                    Arguments::arguments.macs.front());
+        this->wifiController.createMonitorInterface(
+            intel_phy.value(), Arguments::arguments.frequency, Arguments::arguments.txPower,
+            Arguments::arguments.macs.front());
 
         Logger::log(info) << "Monitor interface created\n";
         std::this_thread::sleep_for(std::chrono::milliseconds(500));

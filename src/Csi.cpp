@@ -179,7 +179,7 @@ void Csi::processRawCsi() {
         } */
 
         const std::complex<double> c(real, imag);
-        this->csi.push_back(c);
+        // this->csi.push_back(c);
         this->magnitude.push_back(std::abs(c));
         this->phase.push_back(std::arg(c));
     }
