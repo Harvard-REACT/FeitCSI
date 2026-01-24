@@ -29,6 +29,7 @@
 #include <linux/nl80211.h>
 #include <net/if.h>
 #include <netlink/attr.h>
+#include <netlink/errno.h>
 #include <netlink/genl/ctrl.h>
 #include <netlink/genl/family.h>
 #include <netlink/genl/genl.h>
@@ -96,8 +97,8 @@ std::optional<InterfaceInfo> WiFIController::getInterfaceInfo(const std::string 
     }
 
     if (interfaces.size() > 1) {
-        Logger::log(warning) << "Multiple interfaces found with name " << interfaceName
-                             << ". Using the first one.\n";
+        LOG_WARN << "Multiple interfaces found with name " << interfaceName
+                 << ". Using the first one.\n";
     }
 
     InterfaceInfoBuilder builder = interfaces[0];
@@ -158,8 +159,7 @@ int WiFIController::getInterfaceInfoHandler(struct nl_msg* msg, void* arg) {
     int err = nla_parse(attribute_table, NL80211_ATTR_MAX, genlmsg_attrdata(gnl_header, 0),
                         genlmsg_attrlen(gnl_header, 0), NULL);
     if (err < 0) {
-        Logger::log(error) << "Unable to parse attribute table for Netlink message: " << err
-                           << "\n";
+        LOG_ERR << "Unable to parse attribute table for Netlink message: " << err << "\n";
         return err;
     }
 
@@ -193,7 +193,7 @@ int WiFIController::getInterfaceInfoHandler(struct nl_msg* msg, void* arg) {
     }
 
     if (attribute_table[NL80211_ATTR_WIPHY_TX_POWER_LEVEL]) {
-        Logger::log(info) << ("Magically received tx power!\n");
+        LOG_INFO << ("Magically received tx power!\n");
         ifInfo.txPowerDbm(nla_get_u32(attribute_table[NL80211_ATTR_WIPHY_TX_POWER_LEVEL]) / 100);
     }
 
@@ -215,8 +215,7 @@ int WiFIController::getInterfaceInfoTxPowerHandler(struct nl_msg* msg, void* arg
     int err = nla_parse(attribute_table, NL80211_ATTR_MAX, genlmsg_attrdata(gnl_header, 0),
                         genlmsg_attrlen(gnl_header, 0), NULL);
     if (err < 0) {
-        Logger::log(error) << "Unable to parse attribute table for Netlink message: " << err
-                           << "\n";
+        LOG_ERR << "Unable to parse attribute table for Netlink message: " << err << "\n";
         return err;
     }
 
@@ -475,8 +474,11 @@ nla_put_failure:
 }
 
 int WiFIController::setInterfaceStatus(const std::string interfaceName, bool up) {
+    // libnl route socket operations are not thread-safe without external locking.
+    std::lock_guard<std::mutex> lk(rnl_mutex);
+
     if (!this->nlstate.rnl_socket) {
-        Logger::log(error) << "route socket is not initialized\n";
+        LOG_ERR << "route socket is not initialized\n";
         return -ENOTCONN;
     }
 
@@ -484,9 +486,14 @@ int WiFIController::setInterfaceStatus(const std::string interfaceName, bool up)
     struct rtnl_link* original_link = nullptr;
     if ((err = rtnl_link_get_kernel(this->nlstate.rnl_socket, 0, interfaceName.c_str(),
                                     &original_link)) < 0) {
-        Logger::log(error) << "rtnl_link_get_kernel(" << interfaceName << "): " << nl_geterror(err)
-                           << "\n";
+        LOG_ERR << "rtnl_link_get_kernel(" << interfaceName << "): " << nl_geterror(err) << "\n";
         return err;
+    }
+
+    if (!original_link) {
+        LOG_ERR << "rtnl_link_get_kernel(" << interfaceName
+                << ") returned success but original_link is null\n";
+        return -NLE_OBJ_NOTFOUND;
     }
 
     struct rtnl_link* modified_link = rtnl_link_alloc();
@@ -507,14 +514,13 @@ int WiFIController::setInterfaceStatus(const std::string interfaceName, bool up)
     rtnl_link_put(original_link);
 
     if (err < 0) {
-        Logger::log(error) << "rtnl_link_change(" << interfaceName << "): " << nl_geterror(err)
-                           << "\n";
+        LOG_ERR << "rtnl_link_change(" << interfaceName << "): " << nl_geterror(err) << "\n";
         return err;
     }
 
     if (Arguments::arguments.verbose) {
-        Logger::log(info) << "Interface " << interfaceName << " has been brought "
-                          << (up ? "up" : "down") << "\n";
+        LOG_INFO << "Interface " << interfaceName << " has been brought " << (up ? "up" : "down")
+                 << "\n";
     }
 
     return 0;
@@ -528,9 +534,9 @@ void rfkill_unblock() {
 
     // Check the return value to see if the command was successful
     if (result == 0) {
-        Logger::log(info) << "Successfully executed: " << command;
+        LOG_INFO << "Successfully executed: " << command;
     } else {
-        Logger::log(error) << "Failed to execute: " << command << ". Return code: " << result;
+        LOG_ERR << "Failed to execute: " << command << ". Return code: " << result;
         // You might want to check errno for more specific error details if needed
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(250));
@@ -543,12 +549,12 @@ void WiFIController::createMonitorInterface(uint32_t phy_index,
     int err;
     if (createInterface(MONITOR_INTERFACE_NAME, NL80211_IFTYPE_MONITOR, mac.data(), phy_index) <
         0) {
-        Logger::log(error) << "Failed to create monitor mode interface\n";
+        LOG_ERR << "Failed to create monitor mode interface\n";
         return;
     }
 
     if (setInterfaceStatus(MONITOR_INTERFACE_NAME, true) < 0) {
-        Logger::log(error) << "Failed to set interface to up\n";
+        LOG_ERR << "Failed to set interface to up\n";
         return;
     };
 
@@ -556,7 +562,7 @@ void WiFIController::createMonitorInterface(uint32_t phy_index,
 
     while ((err = setInterfaceFrequency(MONITOR_INTERFACE_NAME, frequency,
                                         Arguments::arguments.bandwidth.c_str())) < 0) {
-        Logger::log(error) << "Failed to set frequency (" << err << ")\n";
+        LOG_ERR << "Failed to set frequency (" << err << ")\n";
         rfkill_unblock();
         std::this_thread::sleep_for(std::chrono::milliseconds(250));
     }
@@ -568,12 +574,12 @@ void WiFIController::createApInterface(uint32_t phy_index,
                                        const unsigned char* mac) {
     int err;
     if (createInterface(AP_INTERFACE_NAME, NL80211_IFTYPE_AP, mac, phy_index) < 0) {
-        Logger::log(error) << "Failed to create AP mode interface\n";
+        LOG_ERR << "Failed to create AP mode interface\n";
         return;
     }
 
     if (setInterfaceStatus(AP_INTERFACE_NAME, true) < 0) {
-        Logger::log(error) << "Failed to set interface to up\n";
+        LOG_ERR << "Failed to set interface to up\n";
         return;
     };
 
@@ -581,14 +587,14 @@ void WiFIController::createApInterface(uint32_t phy_index,
 
     while ((err = setInterfaceFrequency(MONITOR_INTERFACE_NAME, frequency,
                                         Arguments::arguments.bandwidth.c_str())) < 0) {
-        Logger::log(error) << "Failed to set frequency (" << err << ")\n";
+        LOG_ERR << "Failed to set frequency (" << err << ")\n";
         rfkill_unblock();
         std::this_thread::sleep_for(std::chrono::milliseconds(250));
     }
 
     // TODO: fix tx power setting for AP interface, for now this will not loop...
     while ((err = setInterfaceTxPower(AP_INTERFACE_NAME, tx_power_dbm)) > 0) {
-        Logger::log(error) << "Failed to set TX power(" << err << ")\n";
+        LOG_ERR << "Failed to set TX power(" << err << ")\n";
         rfkill_unblock();
         std::this_thread::sleep_for(std::chrono::milliseconds(250));
     };

@@ -129,7 +129,7 @@ void MainController::measureCsi(bool stop) {
         if (this->wifiController.setInterfaceFrequency(
                 MONITOR_INTERFACE_NAME, Arguments::arguments.frequency,
                 Arguments::arguments.bandwidth.c_str()) < 0) {
-            Logger::log(error) << "Failed to set frequency\n";
+            LOG_ERR << "Failed to set frequency\n";
         };
         pthread_create(&this->measureCsiThread, NULL, &MainController::measureCsi, NULL);
         pthread_detach(this->measureCsiThread);
@@ -152,7 +152,7 @@ void MainController::injectPackets(bool stop) {
         if (this->wifiController.setInterfaceFrequency(
                 MONITOR_INTERFACE_NAME, Arguments::arguments.frequency,
                 Arguments::arguments.bandwidth.c_str()) < 0) {
-            Logger::log(error) << "Failed to set frequency\n";
+            LOG_ERR << "Failed to set frequency\n";
         };
         pthread_create(&this->injectPacketThread, NULL, &MainController::injectPackets, NULL);
         pthread_detach(this->injectPacketThread);
@@ -257,14 +257,14 @@ void MainController::runUdpSocket() {
 void MainController::initInterface() {
     try {
         // this->wifiController.killNetworkProcesses();
-        Logger::log(info) << "Initializing the WiFi Controller\n";
+        LOG_INFO << "Initializing the WiFi Controller\n";
         this->wifiController.init();
-        Logger::log(info) << "Obtaining all WiFi Interfaces\n";
+        LOG_INFO << "Obtaining all WiFi Interfaces\n";
         this->wifiController.getAllInterfaces();
 
         std::optional<uint32_t> intel_phy = std::nullopt;
         for (const auto& [_, interface] : this->wifiController.interfaces) {
-            Logger::log(info) << "interface " << interface.ifName << "\n";
+            LOG_INFO << "interface " << interface.ifName << "\n";
             if (interface.ifName == "wlp1s0") {
                 this->interfacesToRestore.push_back(interface);
                 intel_phy = interface.wiphy;
@@ -273,33 +273,32 @@ void MainController::initInterface() {
             }
         }
         if (!intel_phy.has_value()) {
-            Logger::log(error) << "No suitable Intel WiFi interface found\n";
-            Logger::log(error)
-                << "Attempting to restore previous interface by resetting all interfaces\n";
+            LOG_ERR << "No suitable Intel WiFi interface found\n";
+            LOG_ERR << "Attempting to restore previous interface by resetting all interfaces\n";
 
-            Logger::log(info) << "TODO: install the reset script globally and then call it here "
-                                 "and redo the check, if nothing is found then exit\n";
+            LOG_INFO << "TODO: install the reset script globally and then call it here "
+                        "and redo the check, if nothing is found then exit\n";
 
             exit(-1);
         }
 
-        Logger::log(info) << "Using phy " << intel_phy.value() << "\n";
+        LOG_INFO << "Using phy " << intel_phy.value() << "\n";
 
         this->wifiController.createMonitorInterface(
             intel_phy.value(), Arguments::arguments.frequency, Arguments::arguments.txPower,
             Arguments::arguments.macs.front());
 
-        Logger::log(info) << "Monitor interface created\n";
+        LOG_INFO << "Monitor interface created\n";
         // this->wifiController.createApInterface(intel_phy, Arguments::arguments.frequency,
         //                                        Arguments::arguments.txPower,
         //                                        Arguments::arguments.mac);
-        // Logger::log(info) << "AP interface created\n";
+        // LOG_INFO << "AP interface created\n";
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
     } catch (const std::exception& e) {
         if (MainController::mainWindow) {
             MainController::mainWindow->fatalError(e.what());
         } else {
-            Logger::log(error) << e.what() << '\n';
+            LOG_ERR << e.what() << '\n';
             delete MainController::instance;
             exit(1);
         }
@@ -310,11 +309,11 @@ void* MainController::measureCsi(void* arg) {
     try {
         // if (MainController::getInstance()->wifiController.setInterfaceStatus(AP_INTERFACE_NAME,
         //                                                                      false) < 0) {
-        //     Logger::log(error) << "Failed to take down the AP interface\n";
+        //     LOG_ERR << "Failed to take down the AP interface\n";
         // };
         if (MainController::getInstance()->wifiController.setInterfaceStatus(MONITOR_INTERFACE_NAME,
                                                                              true) < 0) {
-            Logger::log(error) << "Failed to put the monitor mode interface up";
+            LOG_ERR << "Failed to put the monitor mode interface up";
         };
 
         WiFiCsiController wcs;
@@ -324,7 +323,7 @@ void* MainController::measureCsi(void* arg) {
         if (MainController::mainWindow) {
             MainController::mainWindow->fatalError(e.what());
         } else {
-            Logger::log(error) << e.what() << '\n';
+            LOG_ERR << e.what() << '\n';
         }
     }
 
@@ -336,7 +335,7 @@ void* MainController::ftm(void* arg) {
     try {
         // if (MainController::getInstance()->wifiController.setInterfaceStatus(AP_INTERFACE_NAME,
         //                                                                      false) < 0) {
-        //     Logger::log(error) << "Failed to take down the AP interface\n";
+        //     LOG_ERR << "Failed to take down the AP interface\n";
         // };
 
         WiFiFtmController wft;
@@ -375,11 +374,11 @@ void* MainController::ftm(void* arg) {
                     firstRun = true;
                     // if (MainController::getInstance()->wifiController.setInterfaceStatus(
                     //         AP_INTERFACE_NAME, true) < 0) {
-                    //     Logger::log(error) << "Failed to take down the AP interface\n";
+                    //     LOG_ERR << "Failed to take down the AP interface\n";
                     // };
                     if (MainController::getInstance()->wifiController.setInterfaceStatus(
                             MONITOR_INTERFACE_NAME, false) < 0) {
-                        Logger::log(error) << "Failed to put the monitor mode interface up";
+                        LOG_ERR << "Failed to put the monitor mode interface up";
                     };
                 }
             }
@@ -402,7 +401,7 @@ void* MainController::ftm(void* arg) {
         if (MainController::mainWindow) {
             MainController::mainWindow->fatalError(e.what());
         } else {
-            Logger::log(error) << e.what() << '\n';
+            LOG_ERR << e.what() << '\n';
         }
     }
 
@@ -422,12 +421,12 @@ void* MainController::ftmResponder(void* arg) {
 
                 if (MainController::getInstance()->wifiController.setInterfaceStatus(
                         AP_INTERFACE_NAME, true) < 0) {
-                    Logger::log(error) << "Failed to take down the AP interface\n";
+                    LOG_ERR << "Failed to take down the AP interface\n";
                 };
 
                 if (MainController::getInstance()->wifiController.setInterfaceStatus(
                         MONITOR_INTERFACE_NAME, false) < 0) {
-                    Logger::log(error) << "Failed to put the monitor mode interface up";
+                    LOG_ERR << "Failed to put the monitor mode interface up";
                 };
 
                 std::this_thread::sleep_for(
@@ -435,7 +434,7 @@ void* MainController::ftmResponder(void* arg) {
             }
         } else {
             if (Arguments::arguments.verbose) {
-                Logger::log(info) << "FTM responder was started\n";
+                LOG_INFO << "FTM responder was started\n";
             }
         }
         while (1) {
@@ -445,7 +444,7 @@ void* MainController::ftmResponder(void* arg) {
         if (MainController::mainWindow) {
             MainController::mainWindow->fatalError(e.what());
         } else {
-            Logger::log(error) << e.what() << '\n';
+            LOG_ERR << e.what() << '\n';
         }
     }
 
@@ -456,11 +455,11 @@ void* MainController::injectPackets(void* arg) {
     try {
         // if (MainController::getInstance()->wifiController.setInterfaceStatus(AP_INTERFACE_NAME,
         //                                                                      false) < 0) {
-        //     Logger::log(error) << "Failed to take down the AP interface\n";
+        //     LOG_ERR << "Failed to take down the AP interface\n";
         // };
         if (MainController::getInstance()->wifiController.setInterfaceStatus(MONITOR_INTERFACE_NAME,
                                                                              true) < 0) {
-            Logger::log(error) << "Failed to put the monitor mode interface up";
+            LOG_ERR << "Failed to put the monitor mode interface up";
         };
 
         PacketInjector pi;
@@ -485,7 +484,7 @@ void* MainController::injectPackets(void* arg) {
         if (MainController::mainWindow) {
             MainController::mainWindow->fatalError(e.what());
         } else {
-            Logger::log(error) << e.what() << '\n';
+            LOG_ERR << e.what() << '\n';
         }
     }
 
@@ -506,24 +505,24 @@ void MainController::restoreState() {
     // mainController->wifiController.deleteInterface(AP_INTERFACE_NAME);
     for (InterfaceInfo interface : mainController->interfacesToRestore) {
         if (Arguments::arguments.verbose) {
-            Logger::log(info) << "Recovering interface " << interface.ifName << "\n";
+            LOG_INFO << "Recovering interface " << interface.ifName << "\n";
         }
         unsigned char mac[ETH_ALEN];
         if (!mainController->wifiController.mac_a2n(interface.mac, mac)) {
-            Logger::log(error) << "Failed to convert mac address " << interface.mac << "\n";
+            LOG_ERR << "Failed to convert mac address " << interface.mac << "\n";
             continue;
         };
         if (mainController->wifiController.createInterface(
                 interface.ifName, (nl80211_iftype)interface.ifType, mac, interface.wiphy) < 0) {
-            Logger::log(error) << "Failed to restore " << interface.ifName
-                               << " with mac: " << interface.mac << "\n";
+            LOG_ERR << "Failed to restore " << interface.ifName << " with mac: " << interface.mac
+                    << "\n";
         };
     }
     mainController->interfacesToRestore.clear();
     mainController->wifiController.interfaces.clear();
 
     if (Arguments::arguments.verbose) {
-        Logger::log(info) << "Exiting recovery state...\n";
+        LOG_INFO << "Exiting recovery state...\n";
     }
 }
 

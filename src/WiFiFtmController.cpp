@@ -264,7 +264,7 @@ int WiFiFtmController::processFtmHandler(struct nl_msg* msg, void* arg) {
         if (ftm[NL80211_PMSR_FTM_RESP_ATTR_FAIL_REASON]) {
             uint32_t reason = nla_get_u32(ftm[NL80211_PMSR_FTM_RESP_ATTR_FAIL_REASON]);
             if (Arguments::arguments.verbose) {
-                Logger::log(info) << "FTM failed to measure " << reason << "\n";
+                LOG_INFO << "FTM failed to measure " << reason << "\n";
             }
             wfc->lastRttIsSuccess = false;
             return NL_OK;
@@ -326,7 +326,7 @@ int WiFiFtmController::processFtmHandler(struct nl_msg* msg, void* arg) {
         };
 
         if (Arguments::arguments.verbose) {
-            Logger::log(info) << "FTM average RTT: " << ftmData.rttAvg << "ps\n";
+            LOG_INFO << "FTM average RTT: " << ftmData.rttAvg << "ps\n";
         }
 
         if (MainController::getInstance()->udpSocket) {

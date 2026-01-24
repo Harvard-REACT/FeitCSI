@@ -27,6 +27,7 @@
 #include <netlink/msg.h>
 #include "Netlink.h"
 
+#include <mutex>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -274,6 +275,8 @@ class WiFIController : public Netlink {
     bool mac_a2n(const std::string& mac, unsigned char* out);
 
    private:
+    std::mutex rnl_mutex = {};
+
     int frequencyToChannel(int freq);
 
     /**

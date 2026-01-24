@@ -44,7 +44,7 @@ int main(int argc, char* argv[]) {
     }
 
     if (Arguments::arguments.verbose) {
-        Logger::log(info) << "Exiting...\n";
+        LOG_INFO << "Exiting...\n";
     }
     return 0;
 }

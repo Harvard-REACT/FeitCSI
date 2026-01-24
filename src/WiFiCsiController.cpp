@@ -56,7 +56,7 @@ int WiFiCsiController::listenToCsi() {
 int WiFiCsiController::listenToCsiHandler(struct nl80211_state* state,
                                           struct nl_msg* msg,
                                           void* arg) {
-    Logger::log(info) << "Setting up CSI listening...\n";
+    LOG_INFO << "Setting up CSI listening...\n";
     NLA_PUT_U32(msg, NL80211_ATTR_VENDOR_ID, 0x001735);
     NLA_PUT_U32(msg, NL80211_ATTR_VENDOR_SUBCMD, 0x24);
     return 0;
@@ -142,47 +142,46 @@ int WiFiCsiController::processListenToCsiHandler(struct nl_msg* msg, void* arg) 
 }
 
 void WiFiCsiController::printDetail(Csi* c) {
-    Logger::log(info) << "Subcarrier count: " << c->rawHeaderData.numSubCarriers << ", ";
-    Logger::log(info, true) << "RX: " << +c->rawHeaderData.numRx << ", ";
-    Logger::log(info, true) << "TX: " << +c->rawHeaderData.numTx << ", ";
-    Logger::log(info, true) << "MAC" << std::hex << +c->rawHeaderData.srcMac[0] << ":"
-                            << +c->rawHeaderData.srcMac[1] << ":" << +c->rawHeaderData.srcMac[2]
-                            << ":" << +c->rawHeaderData.srcMac[3] << ":"
-                            << +c->rawHeaderData.srcMac[4] << ":" << +c->rawHeaderData.srcMac[5]
-                            << std::dec << ", ";
+    LOG_INFO << "Subcarrier count: " << c->rawHeaderData.numSubCarriers << ", ";
+    LOG_P(info) << "RX: " << +c->rawHeaderData.numRx << ", ";
+    LOG_P(info) << "TX: " << +c->rawHeaderData.numTx << ", ";
+    LOG_P(info) << "MAC" << std::hex << +c->rawHeaderData.srcMac[0] << ":"
+                << +c->rawHeaderData.srcMac[1] << ":" << +c->rawHeaderData.srcMac[2] << ":"
+                << +c->rawHeaderData.srcMac[3] << ":" << +c->rawHeaderData.srcMac[4] << ":"
+                << +c->rawHeaderData.srcMac[5] << std::dec << ", ";
 
     switch (c->channelWidth) {
         case RATE_MCS_CHAN_WIDTH_20:
-            Logger::log(info, true) << "Channel width: 20, ";
+            LOG_P(info) << "Channel width: 20, ";
             break;
         case RATE_MCS_CHAN_WIDTH_40:
-            Logger::log(info, true) << "Channel width: 40, ";
+            LOG_P(info) << "Channel width: 40, ";
             break;
         case RATE_MCS_CHAN_WIDTH_80:
-            Logger::log(info, true) << "Channel width: 80, ";
+            LOG_P(info) << "Channel width: 80, ";
             break;
         case RATE_MCS_CHAN_WIDTH_160:
-            Logger::log(info, true) << "Channel width: 160, ";
+            LOG_P(info) << "Channel width: 160, ";
             break;
     }
     switch (c->format) {
         case RATE_MCS_CCK_MSK:  // VERY OLD FORMAT
-            Logger::log(info, true) << "Format: CCK\n";
+            LOG_P(info) << "Format: CCK\n";
             break;
         case RATE_MCS_LEGACY_OFDM_MSK:
-            Logger::log(info, true) << "Format: LEGACY_OFDM\n";
+            LOG_P(info) << "Format: LEGACY_OFDM\n";
             break;
         case RATE_MCS_HT_MSK:
-            Logger::log(info, true) << "Format: HT\n";
+            LOG_P(info) << "Format: HT\n";
             break;
         case RATE_MCS_VHT_MSK:
-            Logger::log(info, true) << "Format: VHT\n";
+            LOG_P(info) << "Format: VHT\n";
             break;
         case RATE_MCS_HE_MSK:
-            Logger::log(info, true) << "Format: HE\n";
+            LOG_P(info) << "Format: HE\n";
             break;
         case RATE_MCS_EHT_MSK:
-            Logger::log(info, true) << "Format: EHT\n";
+            LOG_P(info) << "Format: EHT\n";
             break;
     }
 }
@@ -190,9 +189,9 @@ void WiFiCsiController::printDetail(Csi* c) {
 void WiFiCsiController::enableCsi(bool enable) {
     if (Arguments::arguments.verbose) {
         if (enable) {
-            Logger::log(info) << "Enabling CSI measurement\n";
+            LOG_INFO << "Enabling CSI measurement\n";
         } else {
-            Logger::log(info) << "Disabling CSI measurement\n";
+            LOG_INFO << "Disabling CSI measurement\n";
         }
     }
 

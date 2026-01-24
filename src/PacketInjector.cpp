@@ -234,10 +234,6 @@ static bool radiotap_from_rateNFlags(uint8_t* out,
 }  // namespace
 
 void PacketInjector::inject(const std::array<uint8_t, 6>& src) {
-    if (Arguments::arguments.verbose) {
-        Logger::log(info) << "Injecting " << Arguments::arguments.format << "\n";
-    }
-
     if (Arguments::arguments.format == "NOHT") {
         this->injectNoHT(src);
     } else if (Arguments::arguments.format == "HT") {
@@ -335,7 +331,7 @@ void PacketInjector::send(uint32_t rateNFlags, const std::array<uint8_t, 6>& src
     size_t rt_len = 0;
     if (!radiotap_from_rateNFlags(frame + off, sizeof(frame) - off, rateNFlags,
                                   Arguments::arguments, rt_len)) {
-        Logger::log(error) << "Failed to build radiotap\n";
+        LOG_ERR << "Failed to build radiotap\n";
         return;
     }
     off += rt_len;
@@ -344,7 +340,7 @@ void PacketInjector::send(uint32_t rateNFlags, const std::array<uint8_t, 6>& src
     const size_t hdr_len =
         build_ieee80211_data_hdr(frame + off, sizeof(frame) - off, dst, src, bssid);
     if (!hdr_len) {
-        Logger::log(error) << "Failed to build 802.11 header\n";
+        LOG_ERR << "Failed to build 802.11 header\n";
         return;
     }
     off += hdr_len;
@@ -353,7 +349,7 @@ void PacketInjector::send(uint32_t rateNFlags, const std::array<uint8_t, 6>& src
     static const uint8_t payload[] = {0xde, 0xad, 0xbe, 0xef, 0x46, 0x65,
                                       0x69, 0x74, 0x43, 0x53, 0x49};
     if (off + sizeof(payload) > sizeof(frame)) {
-        Logger::log(error) << "Frame too large\n";
+        LOG_ERR << "Frame too large\n";
         return;
     }
     std::memcpy(frame + off, payload, sizeof(payload));
@@ -366,23 +362,23 @@ void PacketInjector::send(uint32_t rateNFlags, const std::array<uint8_t, 6>& src
 
         ppcap = pcap_open_live(ifname, 2048, 1, 20, errbuf);
         if (!ppcap) {
-            Logger::log(error) << "pcap_open_live(" << ifname << ") failed: " << errbuf << "\n";
+            LOG_ERR << "pcap_open_live(" << ifname << ") failed: " << errbuf << "\n";
             return;
         }
     }
 
     const int r = pcap_inject(ppcap, frame, static_cast<int>(off));
     if (r < 0) {
-        Logger::log(error) << "pcap_inject failed: " << pcap_geterr(ppcap) << "\n";
+        LOG_ERR << "pcap_inject failed: " << pcap_geterr(ppcap) << "\n";
         return;
     }
     if (r != static_cast<int>(off)) {
-        Logger::log(warning) << "pcap_inject wrote " << r << " bytes, expected " << off << "\n";
+        LOG_WARN << "pcap_inject wrote " << r << " bytes, expected " << off << "\n";
         return;
     }
 
     if (Arguments::arguments.verbose) {
-        Logger::log(info) << "Injected " << off << " bytes; format=" << Arguments::arguments.format
-                          << " rateNFlags=0x" << std::hex << rateNFlags << std::dec << "\n";
+        LOG_INFO << "Injected " << off << " bytes; format=" << Arguments::arguments.format
+                 << " rateNFlags=0x" << std::hex << rateNFlags << std::dec << "\n";
     }
 }

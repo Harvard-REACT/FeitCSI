@@ -32,7 +32,7 @@
 void Netlink::init() {
     int err = this->nlInit(&this->nlstate);
     if (err < 0) {
-        Logger::log(error) << "Unable to initialize netlink " << err << "\n";
+        LOG_ERR << "Unable to initialize netlink " << err << "\n";
     }
 }
 
@@ -95,7 +95,7 @@ out_handle_destroy_generic:
     state->gnl_socket = nullptr;
 
     if (!errMsg.empty())
-        Logger::log(error) << errMsg;
+        LOG_ERR << errMsg;
 
     return err;
 }
@@ -121,9 +121,13 @@ int Netlink::nlExecCommand(Cmd& cmd) {
         throw std::ios_base::failure("failed to allocate netlink callback\n");
     }
 
+    int flags = cmd.nlFlags;
+    if (!(flags & NLM_F_DUMP)) {
+        flags |= NLM_F_ACK | NLM_F_ACK_TLVS;
+    }
+
     // Build the message
-    genlmsg_put(msg, NL_AUTO_PORT, NL_AUTO_SEQ, this->nlstate.nl80211_id, 0, cmd.nlFlags, cmd.id,
-                0);
+    genlmsg_put(msg, NL_AUTO_PORT, NL_AUTO_SEQ, this->nlstate.nl80211_id, 0, flags, cmd.id, 0);
 
     switch (cmd.idby) {
         case CIB_PHY:
@@ -177,8 +181,7 @@ int Netlink::nlExecCommand(Cmd& cmd) {
         err = nl_recvmsgs(this->nlstate.gnl_socket, cb);
         if (err < 0) {
             // libnl transport/parse error (not kernel errno)
-            Logger::log(error) << "nl_recvmsgs failed (" << err << "): " << nl_geterror(err)
-                               << "\n";
+            LOG_ERR << "nl_recvmsgs failed (" << err << "): " << nl_geterror(err) << "\n";
             break;
         }
     }
@@ -191,11 +194,11 @@ int Netlink::nlExecCommand(Cmd& cmd) {
         // rctx.err is a negative errno from kernel (e.g., -EBUSY, -EINVAL, ...)
         std::string why = strerror(-rctx.err);
         if (!rctx.extack.empty()) {
-            Logger::log(error) << "nl80211 cmd(" << (int)cmd.id << ") failed: " << why << " ("
-                               << rctx.err << ")" << " — " << rctx.extack << "\n";
+            LOG_ERR << "nl80211 cmd(" << (int)cmd.id << ") failed: " << why << " (" << rctx.err
+                    << ")" << " — " << rctx.extack << "\n";
         } else {
-            Logger::log(error) << "nl80211 cmd(" << (int)cmd.id << ") failed: " << why << " ("
-                               << rctx.err << ")\n";
+            LOG_ERR << "nl80211 cmd(" << (int)cmd.id << ") failed: " << why << " (" << rctx.err
+                    << ")\n";
         }
         return rctx.err;  // propagate kernel errno
     }
