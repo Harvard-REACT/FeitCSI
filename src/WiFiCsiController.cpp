@@ -143,45 +143,44 @@ int WiFiCsiController::processListenToCsiHandler(struct nl_msg* msg, void* arg) 
 
 void WiFiCsiController::printDetail(Csi* c) {
     LOG_INFO << "Subcarrier count: " << c->rawHeaderData.numSubCarriers << ", ";
-    LOG_P(info) << "RX: " << +c->rawHeaderData.numRx << ", ";
-    LOG_P(info) << "TX: " << +c->rawHeaderData.numTx << ", ";
-    LOG_P(info) << "MAC" << std::hex << +c->rawHeaderData.srcMac[0] << ":"
-                << +c->rawHeaderData.srcMac[1] << ":" << +c->rawHeaderData.srcMac[2] << ":"
-                << +c->rawHeaderData.srcMac[3] << ":" << +c->rawHeaderData.srcMac[4] << ":"
-                << +c->rawHeaderData.srcMac[5] << std::dec << ", ";
+    LOG_INFO << "RX: " << c->rawHeaderData.numRx << ", ";
+    LOG_INFO << "TX: " << c->rawHeaderData.numTx << ", ";
+    LOG_INFO << "MAC" << std::hex << c->rawHeaderData.srcMac[0] << ":" << c->rawHeaderData.srcMac[1]
+             << ":" << c->rawHeaderData.srcMac[2] << ":" << c->rawHeaderData.srcMac[3] << ":"
+             << c->rawHeaderData.srcMac[4] << ":" << c->rawHeaderData.srcMac[5] << std::dec << ", ";
 
     switch (c->channelWidth) {
         case RATE_MCS_CHAN_WIDTH_20:
-            LOG_P(info) << "Channel width: 20, ";
+            LOG_INFO << "Channel width: 20, ";
             break;
         case RATE_MCS_CHAN_WIDTH_40:
-            LOG_P(info) << "Channel width: 40, ";
+            LOG_INFO << "Channel width: 40, ";
             break;
         case RATE_MCS_CHAN_WIDTH_80:
-            LOG_P(info) << "Channel width: 80, ";
+            LOG_INFO << "Channel width: 80, ";
             break;
         case RATE_MCS_CHAN_WIDTH_160:
-            LOG_P(info) << "Channel width: 160, ";
+            LOG_INFO << "Channel width: 160, ";
             break;
     }
     switch (c->format) {
         case RATE_MCS_CCK_MSK:  // VERY OLD FORMAT
-            LOG_P(info) << "Format: CCK\n";
+            LOG_INFO << "Format: CCK\n";
             break;
         case RATE_MCS_LEGACY_OFDM_MSK:
-            LOG_P(info) << "Format: LEGACY_OFDM\n";
+            LOG_INFO << "Format: LEGACY_OFDM\n";
             break;
         case RATE_MCS_HT_MSK:
-            LOG_P(info) << "Format: HT\n";
+            LOG_INFO << "Format: HT\n";
             break;
         case RATE_MCS_VHT_MSK:
-            LOG_P(info) << "Format: VHT\n";
+            LOG_INFO << "Format: VHT\n";
             break;
         case RATE_MCS_HE_MSK:
-            LOG_P(info) << "Format: HE\n";
+            LOG_INFO << "Format: HE\n";
             break;
         case RATE_MCS_EHT_MSK:
-            LOG_P(info) << "Format: EHT\n";
+            LOG_INFO << "Format: EHT\n";
             break;
     }
 }
