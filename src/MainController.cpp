@@ -274,6 +274,12 @@ void MainController::initInterface() {
         }
         if (!intel_phy.has_value()) {
             Logger::log(error) << "No suitable Intel WiFi interface found\n";
+            Logger::log(error)
+                << "Attempting to restore previous interface by resetting all interfaces\n";
+
+            Logger::log(info) << "TODO: install the reset script globally and then call it here "
+                                 "and redo the check, if nothing is found then exit\n";
+
             exit(-1);
         }
 
@@ -284,7 +290,6 @@ void MainController::initInterface() {
             Arguments::arguments.macs.front());
 
         Logger::log(info) << "Monitor interface created\n";
-        std::this_thread::sleep_for(std::chrono::milliseconds(500));
         // this->wifiController.createApInterface(intel_phy, Arguments::arguments.frequency,
         //                                        Arguments::arguments.txPower,
         //                                        Arguments::arguments.mac);

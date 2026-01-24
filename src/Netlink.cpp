@@ -53,10 +53,12 @@ int Netlink::nlInit(struct nl80211_state* state) {
         goto out_handle_destroy_generic;
     }
 
-    nl_socket_set_buffer_size(state->gnl_socket, 8192, 8192);
+    nl_socket_set_buffer_size(state->gnl_socket, 4 * 1024 * 1024, 4 * 1024 * 1024);
 
     err = 1;
     setsockopt(nl_socket_get_fd(state->gnl_socket), SOL_NETLINK, NETLINK_EXT_ACK, &err,
+               sizeof(err));
+    setsockopt(nl_socket_get_fd(state->gnl_socket), SOL_NETLINK, NETLINK_NO_ENOBUFS, &err,
                sizeof(err));
 
     state->nl80211_id = genl_ctrl_resolve(state->gnl_socket, "nl80211");
@@ -118,12 +120,6 @@ int Netlink::nlExecCommand(Cmd& cmd) {
         nlmsg_free(msg);
         throw std::ios_base::failure("failed to allocate netlink callback\n");
     }
-    struct nl_cb* s_cb = nl_cb_alloc(NL_CB_DEFAULT);
-    if (!s_cb) {
-        nl_cb_put(cb);
-        nlmsg_free(msg);
-        throw std::ios_base::failure("failed to allocate netlink callback\n");
-    }
 
     // Build the message
     genlmsg_put(msg, NL_AUTO_PORT, NL_AUTO_SEQ, this->nlstate.nl80211_id, 0, cmd.nlFlags, cmd.id,
@@ -151,8 +147,6 @@ int Netlink::nlExecCommand(Cmd& cmd) {
             throw std::ios_base::failure("pre-execute handler failed");
         }
     }
-
-    nl_socket_set_cb(this->nlstate.gnl_socket, s_cb);
 
     // Send
     err = nl_send_auto(this->nlstate.gnl_socket, msg);
@@ -198,8 +192,7 @@ int Netlink::nlExecCommand(Cmd& cmd) {
         std::string why = strerror(-rctx.err);
         if (!rctx.extack.empty()) {
             Logger::log(error) << "nl80211 cmd(" << (int)cmd.id << ") failed: " << why << " ("
-                               << rctx.err << ")"
-                               << " — " << rctx.extack << "\n";
+                               << rctx.err << ")" << " — " << rctx.extack << "\n";
         } else {
             Logger::log(error) << "nl80211 cmd(" << (int)cmd.id << ") failed: " << why << " ("
                                << rctx.err << ")\n";
@@ -215,7 +208,6 @@ int Netlink::nlExecCommand(Cmd& cmd) {
 
 nla_put_failure:
     nl_cb_put(cb);
-    nl_cb_put(s_cb);
     nlmsg_free(msg);
     throw std::ios_base::failure("building message failed\n");
 }

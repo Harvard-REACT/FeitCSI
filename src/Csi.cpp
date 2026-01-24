@@ -26,17 +26,19 @@
 #include "Logger.h"
 #include "rs.h"
 
-Csi::Csi() {}
+Csi::Csi() : rawCsiData(nullptr) {}
 
 Csi::~Csi() {
     if (this->rawCsiData) {
-        delete rawCsiData;
+        delete[] rawCsiData;
+        rawCsiData = nullptr;
     }
 }
 
 void Csi::loadFromFile(std::string fileName) {
     std::ifstream ifs(fileName, std::ios::binary);
     ifs.read((char*)&this->rawHeaderData, CSI_HEADER_LENGTH);
+    delete[] this->rawCsiData;
     this->rawCsiData = new uint8_t[this->rawHeaderData.csiDataSize];
 
     // uint8_t rawCsiData[this->rawHeaderData.csiDataSize];
@@ -59,26 +61,27 @@ void Csi::loadFromMemory(uint8_t* pHeader, uint8_t* pRawCsiData) {
 
 void Csi::loadFromMemory(uint8_t* rawData) {
     memcpy(&this->rawHeaderData, rawData, CSI_HEADER_LENGTH);
+    delete[] this->rawCsiData;
     this->rawCsiData = new uint8_t[this->rawHeaderData.csiDataSize];
     memcpy(this->rawCsiData, &rawData[CSI_HEADER_LENGTH], this->rawHeaderData.csiDataSize);
     this->processRawCsi();
 }
 
 void Csi::save() {
-    std::ofstream outfile;
-    outfile.open(Arguments::arguments.outputFile, std::ios_base::app | std::ios::binary);
-    if (outfile.fail()) {
-        throw std::ios_base::failure("Open file failed: " + std::string(std::strerror(errno)));
-    }
-    outfile.write(reinterpret_cast<char*>(&this->rawHeaderData), sizeof(RawHeaderData));
-    outfile.write(reinterpret_cast<char*>(this->rawCsiData), this->rawHeaderData.csiDataSize);
-    outfile.close();
-    std::filesystem::permissions(
-        Arguments::arguments.outputFile,
-        std::filesystem::perms::all &
-            ~(std::filesystem::perms::owner_exec | std::filesystem::perms::group_exec |
-              std::filesystem::perms::others_exec),
-        std::filesystem::perm_options::add);
+    // std::ofstream outfile;
+    // outfile.open(Arguments::arguments.outputFile, std::ios_base::app | std::ios::binary);
+    // if (outfile.fail()) {
+    //     throw std::ios_base::failure("Open file failed: " + std::string(std::strerror(errno)));
+    // }
+    // outfile.write(reinterpret_cast<char*>(&this->rawHeaderData), sizeof(RawHeaderData));
+    // outfile.write(reinterpret_cast<char*>(this->rawCsiData), this->rawHeaderData.csiDataSize);
+    // outfile.close();
+    // std::filesystem::permissions(
+    //     Arguments::arguments.outputFile,
+    //     std::filesystem::perms::all &
+    //         ~(std::filesystem::perms::owner_exec | std::filesystem::perms::group_exec |
+    //           std::filesystem::perms::others_exec),
+    //     std::filesystem::perm_options::add);
 
     std::cout.write(reinterpret_cast<const char*>(&this->rawHeaderData), sizeof(RawHeaderData));
     std::cout.write(reinterpret_cast<const char*>(this->rawCsiData),
@@ -153,7 +156,7 @@ void Csi::fixCsiBug() {
     this->numSubCarriers = newSubcarrierSize;
     this->rawHeaderData.numSubCarriers = this->numSubCarriers;
     this->rawHeaderData.csiDataSize = newTotalSize;
-    delete this->rawCsiData;
+    delete[] this->rawCsiData;
     this->rawCsiData = new uint8_t[newTotalSize];
     memcpy(this->rawCsiData, fixedCsiData, newTotalSize);
 }

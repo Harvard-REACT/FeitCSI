@@ -30,6 +30,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <memory>
 #include "Logger.h"
 #include "main.h"
 #include "rs.h"
@@ -84,7 +85,7 @@ int WiFiCsiController::processListenToCsiHandler(struct nl_msg* msg, void* arg) 
             uint8_t* dataCsi = (uint8_t*)nla_data(attrs[IWL_MVM_VENDOR_ATTR_CSI_DATA]);
             memcpy(rawCsi, dataCsi, dataLength);
 
-            Csi* c = new Csi();
+            std::unique_ptr<Csi> c = std::make_unique<Csi>();
             c->loadFromMemory(header, dataCsi);
 
             if ((c->channelWidth == RATE_MCS_CHAN_WIDTH_20 &&
@@ -110,7 +111,7 @@ int WiFiCsiController::processListenToCsiHandler(struct nl_msg* msg, void* arg) 
                          (c->rawHeaderData.rateNflag & RATE_LEGACY_RATE_MSK) ==
                              Arguments::arguments.mcs)) {
                         if (Arguments::arguments.verbose) {
-                            printDetail(c);
+                            printDetail(c.get());
                         }
                         if (MainController::getInstance()->udpSocket) {
                             c->sendUDP(MainController::getInstance()->udpSocket);
@@ -119,7 +120,7 @@ int WiFiCsiController::processListenToCsiHandler(struct nl_msg* msg, void* arg) 
                         }
                         if (Arguments::arguments.plot) {
                             WiFiCsiController::csiQueueMutex.lock();
-                            WiFiCsiController::csiQueue.push(c);
+                            WiFiCsiController::csiQueue.push(c.release());
                             WiFiCsiController::csiQueueMutex.unlock();
                         }
                     }

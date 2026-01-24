@@ -53,6 +53,17 @@ class Netlink {
    public:
     void init();
 
+    ~Netlink() {
+        if (this->nlstate.gnl_socket) {
+            nl_socket_free(this->nlstate.gnl_socket);
+            this->nlstate.gnl_socket = nullptr;
+        }
+        if (this->nlstate.rnl_socket) {
+            nl_socket_free(this->nlstate.rnl_socket);
+            this->nlstate.rnl_socket = nullptr;
+        }
+    }
+
    protected:
     struct nl80211_state nlstate;
     int nlExecCommand(Cmd& cmd);

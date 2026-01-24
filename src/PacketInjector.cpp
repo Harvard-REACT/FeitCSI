@@ -17,20 +17,18 @@
  */
 
 #include "PacketInjector.h"
-#include <string.h>
-#include <cstdint>
+
 #include <cstring>
+#include <mutex>
+
 #include "Arguments.h"
 #include "Logger.h"
-#include "main.h"
+#include "main.h"  // for MONITOR_INTERFACE_NAME + rate flags (as in your existing code)
+
+// NOTE: We intentionally keep a single pcap handle because the header only supports one.
+// If you need per-interface injection, that requires a header change (map of handles).
 
 #define SPATIAL_STREAM 16
-
-uint8_t ieee80211Header[] = {0xe0, 0x80, 0x00, 0x00, 0x00, 0x16, 0xea, 0x12, 0x34, 0x56,
-                             0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0x98, 0x59, 0x7a, 0x8b,
-                             0x34, 0x3b, 0x00, 0x00, 0x15, 0x03, 0x15, 0x20};
-
-uint8_t ieee80211Body[] = {};
 
 namespace {
 
@@ -46,7 +44,6 @@ static inline void put_le32(uint8_t* p, uint32_t v) {
     p[3] = static_cast<uint8_t>((v >> 24) & 0xff);
 }
 
-// Radiotap field sizes/alignments (common ones we use)
 static inline size_t align_to(size_t off, size_t a) {
     return (off + (a - 1)) & ~(a - 1);
 }
@@ -58,7 +55,6 @@ struct RadiotapBuilder {
     uint32_t present;  // first present word only (no EXT used here)
 
     explicit RadiotapBuilder(uint8_t* b, size_t c) : buf(b), cap(c), off(8), present(0) {
-        // reserve 8 bytes for fixed header: version,pad,len,present
         if (cap < 8)
             off = cap;
     }
@@ -91,7 +87,6 @@ struct RadiotapBuilder {
         return true;
     }
 
-    // finalize: write header and return total length
     size_t finish() {
         if (cap < 8)
             return 0;
@@ -103,7 +98,7 @@ struct RadiotapBuilder {
     }
 };
 
-// Build a standard 24-byte 802.11 data header (ToDS=0, FromDS=0)
+// 24-byte 802.11 data header (ToDS=0, FromDS=0)
 static size_t build_ieee80211_data_hdr(uint8_t* out,
                                        size_t cap,
                                        const std::array<uint8_t, 6>& addr1_ra_da,
@@ -112,7 +107,7 @@ static size_t build_ieee80211_data_hdr(uint8_t* out,
     if (cap < 24)
         return 0;
 
-    // Frame Control: Data subtype 0, ToDS=0, FromDS=0 => 0x0008 little-endian
+    // Data frame, subtype 0, ToDS=0, FromDS=0 => 0x0008 LE
     out[0] = 0x08;
     out[1] = 0x00;
 
@@ -128,13 +123,12 @@ static size_t build_ieee80211_data_hdr(uint8_t* out,
     return 24;
 }
 
-// Map legacy OFDM index to radiotap RATE (500kbps units). If your "mcs" differs, adjust.
 static uint8_t ofdm_rate_500kbps_from_mcs(uint8_t mcs) {
     // 0..7 -> 6,9,12,18,24,36,48,54 Mbps
     static const uint8_t rates_500[] = {12, 18, 24, 36, 48, 72, 96, 108};
     if (mcs < 8)
         return rates_500[mcs];
-    return 12;  // fallback to 6Mbps
+    return 12;  // 6 Mbps fallback
 }
 
 static bool radiotap_from_rateNFlags(uint8_t* out,
@@ -144,57 +138,43 @@ static bool radiotap_from_rateNFlags(uint8_t* out,
                                      size_t& rt_len_out) {
     RadiotapBuilder rt(out, cap);
 
-    // Always include FLAGS (bit 1) and TX_FLAGS (bit 15) so capture is sane.
-    // FLAGS=0, TX_FLAGS=0
+    // FLAGS (bit 1) and TX_FLAGS (bit 15) help capture decode
     if (!rt.put_u8(IEEE80211_RADIOTAP_FLAGS, 0x00))
         return false;
     if (!rt.put_u16(IEEE80211_RADIOTAP_TX_FLAGS, 0x0000))
         return false;
 
-    // Decide which radiotap PHY field to emit based on format / rateNFlags.
-    // Prefer format string (since your code already chose HT/VHT/HE).
     if (a.format == "NOHT") {
-        // Legacy rate: use IEEE80211_RADIOTAP_RATE (bit 2), 1 byte (500kbps units)
         const uint8_t mcs = static_cast<uint8_t>(rateNFlags & RATE_LEGACY_RATE_MSK);
-        uint8_t rate = ofdm_rate_500kbps_from_mcs(mcs);
+        const uint8_t rate = ofdm_rate_500kbps_from_mcs(mcs);
         if (!rt.put_u8(IEEE80211_RADIOTAP_RATE, rate))
             return false;
 
     } else if (a.format == "HT") {
-        // IEEE80211_RADIOTAP_MCS (bit 19): 3 bytes {known, flags, mcs}
-        // known bits (radiotap spec): 0=BW,1=MCS,2=GI,3=FEC,4=STBC,5=NESS,6=NESS_KNOWN
+        // radiotap MCS: {known, flags, mcs}
         uint8_t known = 0;
         uint8_t flags = 0;
 
-        // BW
-        known |= 1u << 0;
+        known |= 1u << 0;  // BW known
         if (rateNFlags & RATE_MCS_CHAN_WIDTH_40)
-            flags |= 1u << 0;  // MCS_BW_40
+            flags |= 1u << 0;  // BW 40
 
-        // GI
-        known |= 1u << 2;
+        known |= 1u << 2;  // GI known
         if (rateNFlags & RATE_MCS_SGI_MSK)
-            flags |= 1u << 2;  // MCS_SGI
+            flags |= 1u << 2;  // SGI
 
-        // FEC
-        known |= 1u << 3;
+        known |= 1u << 3;  // FEC known
         if (rateNFlags & RATE_MCS_LDPC_MSK)
-            flags |= 1u << 4;  // MCS_FEC_LDPC (radiotap uses bit4)
-        // Note: radiotap MCS flags differ per implementation; Wireshark expects LDPC at bit4.
+            flags |= 1u << 4;  // LDPC (wireshark expects bit4 here)
 
-        // (optional) STBC if you have a mask for it in rateNFlags; not shown in your code.
-
-        uint8_t mcs = static_cast<uint8_t>(rateNFlags & RATE_HT_MCS_CODE_MSK);
-
+        const uint8_t mcs = static_cast<uint8_t>(rateNFlags & RATE_HT_MCS_CODE_MSK);
         uint8_t mcs_field[3] = {known, flags, mcs};
+
         if (!rt.put_bytes_aligned(IEEE80211_RADIOTAP_MCS, mcs_field, sizeof(mcs_field), 1))
             return false;
 
     } else if (a.format == "VHT") {
-        // IEEE80211_RADIOTAP_VHT (bit 21): 12 bytes
-        // struct:
-        //  u16 known; u8 flags; u8 bandwidth; u8 mcs_nss[4]; u8 coding; u8 group_id; u16
-        //  partial_aid;
+        // radiotap VHT: 12 bytes
         uint8_t vht[12];
         std::memset(vht, 0, sizeof(vht));
 
@@ -202,72 +182,49 @@ static bool radiotap_from_rateNFlags(uint8_t* out,
         uint8_t flags = 0;
         uint8_t bw = 0;
 
-        // known bits per radiotap vht spec:
-        // 0=STBC,1=TXOP_PS,2=GI,3=SGI_NSYM_DIS,4=LDPC_EXTRA,5=BF,6=BW,7=GROUP_ID,8=PARTIAL_AID
-        // We'll only set BW + GI (as SGI) + LDPC where possible.
         known |= 1u << 6;  // BW known
-        if (rateNFlags & RATE_MCS_CHAN_WIDTH_160) {
-            bw = 11;  // 160 MHz in radiotap VHT
-        } else if (rateNFlags & RATE_MCS_CHAN_WIDTH_80) {
-            bw = 4;  // 80 MHz
-        } else if (rateNFlags & RATE_MCS_CHAN_WIDTH_40) {
-            bw = 1;  // 40 MHz
-        } else {
-            bw = 0;  // 20 MHz
-        }
+        if (rateNFlags & RATE_MCS_CHAN_WIDTH_160)
+            bw = 11;
+        else if (rateNFlags & RATE_MCS_CHAN_WIDTH_80)
+            bw = 4;
+        else if (rateNFlags & RATE_MCS_CHAN_WIDTH_40)
+            bw = 1;
+        else
+            bw = 0;
 
-        // GI: radiotap VHT uses flag bit 2 to indicate short GI
-        known |= 1u << 2;
+        known |= 1u << 2;  // GI known
         if (rateNFlags & RATE_MCS_SGI_MSK)
             flags |= 1u << 2;
 
-        // LDPC: radiotap VHT uses "coding" byte: 0 = BCC, 1 = LDPC
-        uint8_t coding = (rateNFlags & RATE_MCS_LDPC_MSK) ? 1 : 0;
+        const uint8_t coding = (rateNFlags & RATE_MCS_LDPC_MSK) ? 1 : 0;
 
-        // MCS + NSS: radiotap packs each stream as (NSS << 4) | MCS for up to 4 users.
-        uint8_t mcs = static_cast<uint8_t>(rateNFlags & RATE_MCS_CODE_MSK);
-        uint8_t nss = static_cast<uint8_t>(a.spatialStreams);  // your CLI sets this
-
-        uint8_t mcs_nss = static_cast<uint8_t>(((nss & 0x0f) << 4) | (mcs & 0x0f));
+        const uint8_t mcs = static_cast<uint8_t>(rateNFlags & RATE_MCS_CODE_MSK);
+        const uint8_t nss = static_cast<uint8_t>(a.spatialStreams);
+        const uint8_t mcs_nss = static_cast<uint8_t>(((nss & 0x0f) << 4) | (mcs & 0x0f));
 
         put_le16(vht + 0, known);
         vht[2] = flags;
         vht[3] = bw;
         vht[4] = mcs_nss;  // user0
-        vht[5] = 0;
-        vht[6] = 0;
-        vht[7] = 0;
         vht[8] = coding;
-        vht[9] = 0;             // group_id
-        put_le16(vht + 10, 0);  // partial_aid
 
         if (!rt.put_bytes_aligned(IEEE80211_RADIOTAP_VHT, vht, sizeof(vht), 2))
             return false;
 
     } else if (a.format == "HESU") {
-        // IEEE80211_RADIOTAP_HE (bit 23): 12 bytes (6x u16 data)
-        // We'll fill minimally: GI/LTF and BW if you can derive it, plus MCS/NSS if you know it.
-        // Many drivers ignore HE radiotap for TX; but at least Wireshark will decode the field.
+        // radiotap HE: 12 bytes (6x u16)
         uint16_t he[6];
         std::memset(he, 0, sizeof(he));
 
-        // We can put BW into he[0] bits (depends on spec); without full definitions, keep it 0.
-        // GI/LTF you already encode in rateNFlags via RATE_MCS_HE_GI_LTF_MSK; keep it as raw.
-        // Put raw GI/LTF bits into he[0] low bits as a hint (Wireshark may not fully decode without
-        // exact layout).
         he[0] =
             static_cast<uint16_t>((rateNFlags & RATE_MCS_HE_GI_LTF_MSK) >> RATE_MCS_HE_GI_LTF_POS);
 
-        // Put MCS/NSS in he[1] as a hint (again, layout varies)
-        uint8_t mcs = static_cast<uint8_t>(rateNFlags & RATE_MCS_CODE_MSK);
-        uint8_t nss = static_cast<uint8_t>(a.spatialStreams);
+        const uint8_t mcs = static_cast<uint8_t>(rateNFlags & RATE_MCS_CODE_MSK);
+        const uint8_t nss = static_cast<uint8_t>(a.spatialStreams);
         he[1] = static_cast<uint16_t>((nss << 8) | mcs);
 
         if (!rt.put_bytes_aligned(IEEE80211_RADIOTAP_HE, he, sizeof(he), 2))
             return false;
-
-    } else {
-        // Fallback: emit nothing else; still valid radiotap.
     }
 
     rt_len_out = rt.finish();
@@ -298,7 +255,6 @@ void PacketInjector::injectNoHT(const std::array<uint8_t, 6>& src) {
         mcs = RATE_LEGACY_RATE_MSK & Arguments::arguments.mcs;
     }
     uint32_t rateNFlags = RATE_MCS_LEGACY_OFDM_MSK | mcs | Arguments::arguments.antenna;
-
     this->send(rateNFlags, src);
 }
 
@@ -339,15 +295,15 @@ void PacketInjector::injectHE(const std::array<uint8_t, 6>& src) {
     }
 
     uint32_t ltf = 1;
-    if (Arguments::arguments.ltf == "2xLTF+0.8") {
+    if (Arguments::arguments.ltf == "2xLTF+0.8")
         ltf = 1;
-    } else if (Arguments::arguments.ltf == "2xLTF+1.6") {
+    else if (Arguments::arguments.ltf == "2xLTF+1.6")
         ltf = 2;
-    } else if (Arguments::arguments.ltf == "4xLTF+3.2") {
+    else if (Arguments::arguments.ltf == "4xLTF+3.2")
         ltf = 3;
-    } else if (Arguments::arguments.ltf == "4xLTF+0.8") {
+    else if (Arguments::arguments.ltf == "4xLTF+0.8")
         ltf = 4;
-    }
+
     ltf = (ltf << RATE_MCS_HE_GI_LTF_POS) & RATE_MCS_HE_GI_LTF_MSK;
 
     uint32_t rateNFlags = RATE_MCS_HE_MSK | RATE_MCS_LDPC_MSK | mcs | Arguments::arguments.antenna |
@@ -357,12 +313,17 @@ void PacketInjector::injectHE(const std::array<uint8_t, 6>& src) {
                           (Arguments::arguments.channelWidth == 160 ? RATE_MCS_CHAN_WIDTH_160 : 0) |
                           (Arguments::arguments.spatialStreams == 2 ? SPATIAL_STREAM : 0) |
                           (Arguments::arguments.spatialStreams == 2 ? RATE_MCS_ANT_AB_MSK : 0);
+
     this->send(rateNFlags, src);
 }
 
 void PacketInjector::send(uint32_t rateNFlags, const std::array<uint8_t, 6>& src) {
-    // For debugging clarity: broadcast destination + broadcast BSSID.
-    // If you want unicast, set dst to the receiver station MAC and bssid appropriately.
+    // Minimal thread-safety without changing header:
+    // - ppcap open + pcap_inject are guarded so two threads can't race and corrupt libpcap state.
+    static std::mutex inject_mu;
+    std::lock_guard<std::mutex> lk(inject_mu);
+
+    // Basic test frame: broadcast destination + broadcast BSSID
     const std::array<uint8_t, 6> bcast = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
     const std::array<uint8_t, 6> dst = bcast;
     const std::array<uint8_t, 6> bssid = bcast;
@@ -398,7 +359,7 @@ void PacketInjector::send(uint32_t rateNFlags, const std::array<uint8_t, 6>& src
     std::memcpy(frame + off, payload, sizeof(payload));
     off += sizeof(payload);
 
-    // open once, reuse (do not close each send)
+    // Open pcap once, reuse
     if (!ppcap) {
         char errbuf[PCAP_ERRBUF_SIZE]{};
         const char* ifname = MONITOR_INTERFACE_NAME;

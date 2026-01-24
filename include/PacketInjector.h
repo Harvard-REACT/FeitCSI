@@ -29,6 +29,14 @@
 
 class PacketInjector {
    public:
+    PacketInjector() : ppcap(nullptr) {}
+
+    ~PacketInjector() {
+        if (ppcap) {
+            pcap_close(ppcap);
+            ppcap = nullptr;
+        }
+    }
     void inject(const std::array<uint8_t, 6>& src);
     void injectNoHT(const std::array<uint8_t, 6>& src);
     void injectHT(const std::array<uint8_t, 6>& src);
