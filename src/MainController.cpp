@@ -265,7 +265,10 @@ void MainController::initInterface() {
         std::optional<uint32_t> intel_phy = std::nullopt;
         for (const auto& [_, interface] : this->wifiController.interfaces) {
             LOG_INFO << "interface " << interface.ifName << "\n";
-            if (interface.ifName == "wlp1s0") {
+            // NOTE: This is a very stupid check, this assumes that the default wireless interface
+            // is called
+            //       wlan0 and the Intel wifi card is hooked up as wlp.*
+            if (interface.ifName.find("wlp") != std::string::npos) {
                 this->interfacesToRestore.push_back(interface);
                 intel_phy = interface.wiphy;
                 this->wifiController.deleteInterface(interface.ifName);
@@ -276,7 +279,7 @@ void MainController::initInterface() {
             LOG_ERR << "No suitable Intel WiFi interface found\n";
             LOG_ERR << "Attempting to restore previous interface by resetting all interfaces\n";
 
-            LOG_INFO << "TODO: install the reset script globally and then call it here "
+            LOG_WARN << "TODO: install the reset script globally and then call it here "
                         "and redo the check, if nothing is found then exit\n";
 
             exit(-1);
